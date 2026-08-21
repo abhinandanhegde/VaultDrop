@@ -82,6 +82,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       );
     }
 
+    // Multi-recipient deliveries carry per-recipient ciphertext only.
+    // Refuse BEFORE any policy mutation so a legacy probe cannot burn the drop.
+    if (!delivery.encrypted_data || !delivery.nonce || !delivery.salt) {
+      return NextResponse.json(
+        { status: "error", message: "This is a multi-recipient delivery. Please use the recipient-specific link." },
+        { status: 400 },
+      );
+    }
+
     // Time-lock: not yet released
     if (delivery.release_at) {
       const releaseDate = new Date(delivery.release_at);
@@ -111,11 +120,41 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const isValid = await validatePIN(pin, delivery.pin_hash);
 
     if (!isValid) {
-      const newFailedAttempts = (delivery.failed_attempts || 0) + 1;
+      // Atomic failed-attempt counting. Preferred path: a single-statement
+      // SQL increment (migration 006) which is contention-proof. Fallback:
+      // optimistic CAS on the previous value if the RPC is not deployed yet.
+      let newFailedAttempts = 0;
+      let counted = false;
+
+      const { data: rpcCount, error: rpcError } = await supabase.rpc(
+        "record_failed_attempt_delivery",
+        { p_delivery_id: id }
+      );
+      if (!rpcError && typeof rpcCount === "number") {
+        newFailedAttempts = rpcCount;
+        counted = true;
+      } else {
+        for (let attempt = 0; attempt < 5 && !counted; attempt++) {
+          const { data: cur } = await supabase
+            .from("deliveries")
+            .select("failed_attempts")
+            .eq("id", id)
+            .single();
+          const prev = (cur?.failed_attempts as number) ?? 0;
+          newFailedAttempts = prev + 1;
+          const { data: incRows } = await supabase
+            .from("deliveries")
+            .update({ failed_attempts: newFailedAttempts })
+            .eq("id", id)
+            .eq("failed_attempts", prev)
+            .select("failed_attempts");
+          if (incRows && incRows.length > 0) counted = true;
+        }
+      }
       const remaining = MAX_PIN_ATTEMPTS - newFailedAttempts;
 
       // Lock the delivery if max attempts exceeded
-      if (newFailedAttempts >= MAX_PIN_ATTEMPTS) {
+      if (counted && newFailedAttempts >= MAX_PIN_ATTEMPTS) {
         await supabase
           .from("deliveries")
           .update({
@@ -145,12 +184,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           { status: 423 },
         );
       }
-
-      // Increment failed attempts
-      await supabase
-        .from("deliveries")
-        .update({ failed_attempts: newFailedAttempts })
-        .eq("id", id);
 
       await supabase.from("access_events").insert({
         delivery_id: id,
@@ -200,12 +233,23 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       metadata: { ip },
     });
 
+    // Multi-recipient deliveries carry their ciphertext per recipient;
+    // the recipient-specific endpoint must be used instead.
+    if (!delivery.encrypted_data || !delivery.nonce || !delivery.salt) {
+      return NextResponse.json(
+        { status: "error", message: "This is a multi-recipient delivery. Please use the recipient-specific link." },
+        { status: 400 },
+      );
+    }
+
     // Check view count / max views
     const newViewCount = (delivery.view_count || 0) + 1;
     const isMaxReached = delivery.max_views > 0 && newViewCount >= delivery.max_views;
     const shouldBurn = delivery.burn_after_reading || isMaxReached;
 
-    // Update view count
+    // Optimistic concurrency control: the update only lands if view_count is
+    // unchanged since our SELECT. This guarantees exactly one consumer of a
+    // one-time secret — concurrent losers get 410 and never see ciphertext.
     const statusUpdate: Record<string, unknown> = {
       view_count: newViewCount,
       accessed_at: new Date().toISOString(),
@@ -214,15 +258,33 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (shouldBurn) {
       statusUpdate.status = "destroyed";
       statusUpdate.destroyed_at = new Date().toISOString();
+      statusUpdate.encrypted_data = null;
+      statusUpdate.nonce = null;
+      statusUpdate.salt = null;
+      statusUpdate.pin_hash = null;
     }
 
-    const { error: updateError } = await supabase
+    const { data: casRows, error: updateError } = await supabase
       .from("deliveries")
       .update(statusUpdate)
-      .eq("id", id);
+      .eq("id", id)
+      .eq("view_count", delivery.view_count || 0)
+      .select("id");
 
     if (updateError) {
       console.error("Failed to update delivery status:", updateError);
+      return NextResponse.json(
+        { status: "error", message: "Internal server error" },
+        { status: 500 },
+      );
+    }
+
+    if (!casRows || casRows.length === 0) {
+      // Another request won the race — the one-time allowance is spent.
+      return NextResponse.json(
+        { status: "error", message: "This secret is no longer available" },
+        { status: 410 },
+      );
     }
 
     // Log access event
@@ -238,21 +300,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         event_type: "destroyed",
         metadata: { reason: "burn_after_reading", view_count: newViewCount },
       });
-
-      // Delete encrypted data (zero-knowledge cleanup)
-      await supabase
-        .from("deliveries")
-        .update({ encrypted_data: null, nonce: null, salt: null, pin_hash: null })
-        .eq("id", id);
-    }
-
-    // For multi-recipient deliveries, the delivery-level encrypted_data is null.
-    // Recipients must use the /r/[token] endpoint instead.
-    if (!delivery.encrypted_data || !delivery.nonce || !delivery.salt) {
-      return NextResponse.json(
-        { status: "error", message: "This is a multi-recipient delivery. Please use the recipient-specific link." },
-        { status: 400 },
-      );
     }
 
     return NextResponse.json({

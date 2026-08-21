@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { wipeRecipientCopies } from "@/lib/deadman";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -66,6 +67,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         { status: 500 },
       );
     }
+
+    // Wipe every per-recipient copy so no ciphertext lingers at rest
+    await wipeRecipientCopies(supabase, id);
 
     // Log the revocation
     await supabase.from("access_events").insert({

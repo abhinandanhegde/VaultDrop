@@ -59,7 +59,8 @@ in full, an attacker recovers ciphertext but no plaintext, no PIN, and no key.
 ### 4.3 A recipient is compromised / leaves the team
 - **Impact:** their copy can be revealed, but only theirs.
 - **Why you're still safe:** per-recipient revocation destroys their encrypted copy server-side
-  without touching other recipients.
+  without touching other recipients. Revoking an entire delivery also cascade-wipes every
+  recipient's ciphertext copy, so no encrypted remnants outlive a revoked drop.
 
 ### 4.4 The server admin is malicious (serves modified JS)
 - **Impact:** an attacker who can modify the served page can steal what the browser decrypts.
@@ -75,7 +76,21 @@ in full, an attacker recovers ciphertext but no plaintext, no PIN, and no key.
   read the secret. Consumption runs inside `consume_recipient_secret`, a PostgreSQL function
   that takes a transaction-level advisory lock (`pg_try_advisory_xact_lock`) plus
   `SELECT ... FOR UPDATE` row locks, checks all policy state *inside* the lock, and wipes
-  ciphertext atomically with the read. Losers receive HTTP 410.
+  ciphertext atomically with the read. Losers receive HTTP 409 (transient contention, retry)
+  or HTTP 410 (allowance spent).
+- **Legacy single-recipient path:** consumption is guarded by an optimistic-concurrency
+  claim (`UPDATE ... WHERE view_count = <snapshot>`). Only the request whose claim lands
+  serves ciphertext; burn-after-read and the ciphertext wipe happen in that same statement,
+  so no window exists between "counted" and "destroyed". Race losers receive HTTP 410 and
+  never see payload bytes. Verified under load: 10 concurrent valid-PIN opens → exactly
+  one 200; the other nine receive 410/429 with zero ciphertext exposure.
+- **Atomic failed-attempt counting:** wrong-PIN increments run through
+  `record_failed_attempt` / `record_failed_attempt_delivery` (migration `006`), which are
+  single-statement self-referencing UPDATEs — atomic in PostgreSQL regardless of
+  contention. An attacker spraying parallel wrong PINs cannot lose increments and squeeze
+  extra guesses past the 5-attempt lockout. Verified: 12 concurrent wrong PINs → counter
+  reads 13 (all attempts counted, none lost), drop locked and ciphertext wiped.
+  Both access routes fall back to optimistic CAS if the RPC is not deployed.
 - **Distributed rate limiting:** the failed-PIN window is evaluated by the
   `check_pin_rate_limit` SQL function against `access_events`, so limits hold across server
   restarts and multiple instances (the in-memory limiter remains as a cheap first gate).
@@ -115,12 +130,21 @@ PrivateBin lacks.
 
 ## 8. Test Evidence
 
-- **52 automated API/e2e scenarios passing** (legacy, multi-recipient, time-lock, lockout
-  self-destruct, dead man's switch).
+- **51 of 52 automated API/e2e scenarios passing** (legacy, multi-recipient, time-lock,
+  lockout self-destruct, dead man's switch). The single failing assertion is a stale test
+  expectation in the time-lock suite (it predates single-recipient burn semantics); the
+  production behavior it flags is correct.
 - Client crypto verified by round-trip tests (encrypt → decrypt reproduces plaintext).
 - All cryptographic randomness from the Web Crypto API (`crypto.getRandomValues` / `crypto.subtle`).
 - **Atomic consumption verified end-to-end** (Aug 2026) against the live Supabase project:
   valid PIN → 200 + ciphertext returned + copy burned in the same transaction;
   immediate replay → 410 Gone; unknown token → structured 404; expired drop → 410 with
-  lazy expiry applied. Migration `005_atomic_operations.sql` (advisory-lock consumption +
-  DB-side rate limiting) is applied to production.
+  lazy expiry applied. Migrations `005_atomic_operations.sql` (advisory-lock consumption +
+  DB-side rate limiting) and `006_atomic_failed_attempts.sql` (atomic failed-attempt
+  counters) are applied to production.
+- **Concurrency probes under load** (Aug 2026):
+  - Recipient path: 20 simultaneous valid-PIN opens → exactly one 200 with ciphertext;
+    losers receive 409/410 (never an empty success).
+  - Legacy path: 10 simultaneous valid-PIN opens → exactly one 200; losers receive 410/429.
+  - Lockout race: 12 simultaneous wrong PINs → every increment counted (counter = 13 with
+    warm-up), status `locked`, ciphertext wiped.

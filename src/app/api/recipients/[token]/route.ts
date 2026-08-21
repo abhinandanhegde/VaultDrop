@@ -64,6 +64,15 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       });
     }
 
+    // Lazy expiry: reflect expiration in metadata even before the first access
+    // attempt triggers the server-side transition.
+    if (delivery.expires_at && new Date(delivery.expires_at) <= new Date()) {
+      return NextResponse.json({
+        status: "ok",
+        data: { state: "expired", message: "This delivery has expired" },
+      });
+    }
+
     if (delivery.status === "locked") {
       return NextResponse.json({
         status: "ok",

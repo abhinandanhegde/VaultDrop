@@ -160,21 +160,43 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const isValid = await validatePIN(pin, recipient.pin_hash);
 
     if (!isValid) {
-      const { data: updatedRecipient, error: incError } = await supabase
-        .from("recipients")
-        .update({ failed_attempts: recipient.failed_attempts + 1 })
-        .eq("id", recipientId)
-        .select("failed_attempts")
-        .single();
+      // Atomic failed-attempt counting. Preferred path: a single-statement
+      // SQL increment (migration 006) which is contention-proof. Fallback:
+      // optimistic CAS on the previous value if the RPC is not deployed yet.
+      let newFailedAttempts = 0;
+      let counted = false;
 
-      if (incError) {
-        console.error("Failed to increment failed_attempts:", incError);
+      const { data: rpcCount, error: rpcError } = await supabase.rpc(
+        "record_failed_attempt",
+        { p_recipient_id: recipientId }
+      );
+      if (!rpcError && typeof rpcCount === "number") {
+        newFailedAttempts = rpcCount;
+        counted = true;
+      } else {
+        for (let attempt = 0; attempt < 5 && !counted; attempt++) {
+          const { data: cur } = await supabase
+            .from("recipients")
+            .select("failed_attempts")
+            .eq("id", recipientId)
+            .single();
+          const prev = (cur?.failed_attempts as number) ?? 0;
+          newFailedAttempts = prev + 1;
+          const { data: incRows, error: incError } = await supabase
+            .from("recipients")
+            .update({ failed_attempts: newFailedAttempts })
+            .eq("id", recipientId)
+            .eq("failed_attempts", prev)
+            .select("failed_attempts");
+          if (incError) {
+            console.error("Failed to increment failed_attempts:", incError);
+          }
+          if (incRows && incRows.length > 0) counted = true;
+        }
       }
-
-      const newFailedAttempts = updatedRecipient?.failed_attempts ?? (recipient.failed_attempts + 1);
       const remaining = Math.max(0, MAX_PIN_ATTEMPTS - newFailedAttempts);
 
-      if (newFailedAttempts >= MAX_PIN_ATTEMPTS) {
+      if (counted && newFailedAttempts >= MAX_PIN_ATTEMPTS) {
         await supabase
           .from("recipients")
           .update({
@@ -244,7 +266,31 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       );
     }
 
-    const result = consumedRecipient[0];
+    const result = consumedRecipient[0] as Record<string, unknown>;
+
+    // The RPC signals policy failures via an `error` key in the returned row
+    // (e.g. concurrent consumers, already-consumed, locked). Map them to real
+    // status codes instead of returning 200 with an empty payload.
+    if (result && typeof result === "object" && result.error) {
+      const reason = String(result.error);
+      const statusByReason: Record<string, number> = {
+        concurrent_access: 409,
+        already_consumed: 410,
+        delivery_invalid: 410,
+        locked: 423,
+        not_found: 404,
+        delivery_not_found: 404,
+      };
+      const httpStatus = statusByReason[reason] ?? 410;
+      const message =
+        reason === "concurrent_access"
+          ? "This drop is being opened by another request. Please try again."
+          : "This link is no longer valid";
+      return NextResponse.json(
+        { status: "error", message },
+        { status: httpStatus },
+      );
+    }
 
     if (result.destroyed) {
       return NextResponse.json({
