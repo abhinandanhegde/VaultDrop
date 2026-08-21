@@ -267,5 +267,5 @@ npm run type-check # TypeScript type check
 ```
 
 ## License
-
-MIT — built for RVCE CloneFest 2.0 · Coding Club
+This repository is currently provided without an open-source license.
+All rights reserved by the project authors.
