@@ -1,0 +1,36 @@
+{
+  "name": "vaultdrop",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2",
+    "bcryptjs": "^2.4",
+    "clsx": "^2.1",
+    "lucide-react": "^0.474",
+    "next": "^15.5.23",
+    "next-themes": "^0.4",
+    "react": "^19.0.2",
+    "react-dom": "^19.0.2",
+    "tailwind-merge": "^2.6"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@typescript-eslint/eslint-plugin": "^8",
+    "@typescript-eslint/parser": "^8",
+    "autoprefixer": "^10.5.4",
+    "eslint": "^9",
+    "eslint-config-next": "^15.5.23",
+    "tailwindcss": "^3.4",
+    "typescript": "^5"
+  }
+}

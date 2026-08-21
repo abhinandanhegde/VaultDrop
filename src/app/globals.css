@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222.2 47.4% 12.2%;
+    --foreground: 0 0% 98%;
+    --card: 222.2 47.4% 17%;
+    --card-foreground: 0 0% 98%;
+    --popover: 222.2 47.4% 17%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 205 98.1% 47.4%;
+    --primary-foreground: 222.2 47.4% 17%;
+    --secondary: 252.9 83.9% 59.8%;
+    --secondary-foreground: 222.2 47.4% 17%;
+    --muted: 222.2 47.4% 17%;
+    --muted-foreground: 0 0% 80%;
+    --accent: 252.9 83.9% 59.8%;
+    --accent-foreground: 222.2 47.4% 17%;
+    --border: 222.2 47.4% 30%;
+    --input: 222.2 47.4% 30%;
+    --ring: 205 98.1% 47.4%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+  }
+
+  .dark {
+    --background: 0 0% 9%;
+    --foreground: 0 0% 95%;
+    --card: 224 71% 15%;
+    --card-foreground: 0 0% 95%;
+    --popover: 224 71% 15%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 200 90% 55%;
+    --primary-foreground: 224 71% 15%;
+    --secondary: 252.9 83.9% 59.8%;
+    --secondary-foreground: 224 71% 15%;
+    --muted: 224 71% 18%;
+    --muted-foreground: 0 0% 70%;
+    --accent: 252.9 83.9% 59.8%;
+    --accent-foreground: 224 71% 15%;
+    --border: 224 71% 25%;
+    --input: 224 71% 25%;
+    --ring: 200 90% 55%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-geist-sans), system-ui, sans-serif;
+  }
+}
+
+@layer utilities {
+  .animate-fade-in {
+    animation: fade-in 0.5s ease-out both;
+  }
+  .animate-pop-in {
+    animation: pop-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .animate-rise {
+    animation: rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .animate-glow {
+    animation: glow 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.25);
+  }
+  50% {
+    box-shadow: 0 0 24px 4px hsl(var(--primary) / 0.25);
+  }
+}

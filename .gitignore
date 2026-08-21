@@ -1,0 +1,9 @@
+node_modules
+.next
+.nuxt
+.nvmrc
+.env.local
+*.log
+.DS_Store
+*.tsbuildinfo
+dist
