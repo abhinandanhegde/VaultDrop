@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Lock, Plus, X, RefreshCw, User, Flame, Clock, Timer, HeartPulse } from "lucide-react";
+import { Lock, Plus, X, RefreshCw, User, Flame, Clock, Timer, HeartPulse, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -42,6 +42,7 @@ export default function Home() {
     { id: 0, name: "", pin: "" },
   ]);
   const [burnAfterReading, setBurnAfterReading] = useState(true);
+  const [maxViews, setMaxViews] = useState(3);
   const [expirySeconds, setExpirySeconds] = useState(3600);
   const [releaseMode, setReleaseMode] = useState<"now" | "scheduled">("now");
   const [releaseAt, setReleaseAt] = useState("");
@@ -72,6 +73,12 @@ export default function Home() {
 
   const updateRecipientName = (id: number, name: string) => {
     setRecipients(recipients.map((r) => (r.id === id ? { ...r, name } : r)));
+  };
+
+  const clampMaxViews = (raw: string) => {
+    const n = parseInt(raw, 10);
+    if (isNaN(n)) return 1;
+    return Math.min(99, Math.max(1, n));
   };
 
   const regeneratePin = (id: number) => {
@@ -121,8 +128,8 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          recipients: recipientPayload,
-          maxViews: 1,
+        recipients: recipientPayload,
+        maxViews: burnAfterReading ? 1 : maxViews,
           expiresAt,
           releaseAt: releaseValue(),
           renewalWindowMinutes: deadManEnabled ? renewalWindowMinutes : null,
@@ -161,13 +168,14 @@ export default function Home() {
         {/* Headline */}
         <div className="mb-8 text-center">
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
-            Drop a secret.
+            Read it once.
             <br />
-            <span className="text-primary">It self-destructs.</span>
+            <span className="text-primary">Gone forever.</span>
           </h1>
           <p className="mx-auto mt-3 max-w-md text-sm text-muted-foreground">
-            Encrypted in your browser. Sent to your people. Destroyed after the
-            first read. The server never sees the plaintext.
+            Encrypted in your browser before it ever leaves your device. The
+            server holds only ciphertext it can&apos;t open. One-time links and
+            PINs, sent separately — then every copy deletes itself.
           </p>
         </div>
 
@@ -258,57 +266,106 @@ export default function Home() {
             </p>
           </div>
 
-          {/* Policy row */}
-          <div className="mt-5 flex flex-col gap-3 rounded-xl border border-border/40 bg-background/30 p-3 sm:flex-row sm:items-center sm:justify-between">
-            {/* Burn toggle */}
-            <button
-              type="button"
-              onClick={() => setBurnAfterReading(!burnAfterReading)}
-              className="flex items-center gap-2 text-left"
-            >
-              <span
-                className={cn(
-                  "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
-                  burnAfterReading ? "bg-primary" : "bg-muted",
-                )}
+          {/* Policy */}
+          <div className="mt-5 flex flex-col gap-3 rounded-xl border border-border/40 bg-background/30 p-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {/* Auto-delete toggle */}
+              <button
+                type="button"
+                onClick={() => setBurnAfterReading(!burnAfterReading)}
+                className="flex items-center gap-2 text-left"
               >
                 <span
                   className={cn(
-                    "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform",
-                    burnAfterReading ? "translate-x-5" : "translate-x-1",
+                    "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+                    burnAfterReading ? "bg-primary" : "bg-muted",
                   )}
-                />
-              </span>
-              <span className="flex items-center gap-1.5 text-sm font-medium">
-                <Flame className={cn("h-4 w-4", burnAfterReading ? "text-orange-400" : "text-muted-foreground")} />
-                Self-destruct after read
-              </span>
-            </button>
+                >
+                  <span
+                    className={cn(
+                      "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform",
+                      burnAfterReading ? "translate-x-5" : "translate-x-1",
+                    )}
+                  />
+                </span>
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <Flame className={cn("h-4 w-4", burnAfterReading ? "text-orange-400" : "text-muted-foreground")} />
+                  Auto-delete after first open
+                </span>
+              </button>
 
-            {/* Expiry */}
-            <label className="flex items-center gap-2 text-sm">
-              <Clock className="h-4 w-4 text-muted-foreground" />
-              <select
-                value={expirySeconds}
-                onChange={(e) => setExpirySeconds(Number(e.target.value))}
-                className="rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                aria-label="Expiration"
-              >
-                {EXPIRY_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    Expires in {opt.label.toLowerCase()}
-                  </option>
-                ))}
-              </select>
-            </label>
+              {/* Expiry */}
+              <label className="flex items-center gap-2 text-sm">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <select
+                  value={expirySeconds}
+                  onChange={(e) => setExpirySeconds(Number(e.target.value))}
+                  className="rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label="Expiration"
+                >
+                  {EXPIRY_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      Expires in {opt.label.toLowerCase()}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {/* Open limit — only shown when the drop survives its first open */}
+            {!burnAfterReading && (
+              <div className="flex flex-col gap-1.5 border-t border-border/40 pt-3">
+                <label className="flex flex-wrap items-center gap-2 text-sm">
+                  <Eye className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-medium">Delete after</span>
+                  <span className="inline-flex items-center overflow-hidden rounded-lg border border-input bg-background">
+                    <button
+                      type="button"
+                      onClick={() => setMaxViews((v) => Math.max(1, v - 1))}
+                      disabled={maxViews <= 1}
+                      className="px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label="Fewer opens"
+                    >
+                      −
+                    </button>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={99}
+                      value={maxViews}
+                      onChange={(e) => setMaxViews(clampMaxViews(e.target.value))}
+                      onBlur={(e) => setMaxViews(clampMaxViews(e.target.value))}
+                      className="w-10 border-0 bg-transparent py-1.5 text-center text-sm tabular-nums [appearance:textfield] focus-visible:outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      aria-label="Number of opens before deletion"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setMaxViews((v) => Math.min(99, v + 1))}
+                      disabled={maxViews >= 99}
+                      className="px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label="More opens"
+                    >
+                      +
+                    </button>
+                  </span>
+                  <span className="font-medium">opens</span>
+                </label>
+                <p className="pl-6 text-[11px] text-muted-foreground">
+                  Every open counts, even the same person opening twice. After the{" "}
+                  {maxViews === 1 ? "first" : maxViews === 2 ? "second" : maxViews === 3 ? "third" : `${maxViews}th`}{" "}
+                  open, every copy is deleted for good.
+                </p>
+              </div>
+            )}
           </div>
 
-          {/* Release scheduling */}
+          {/* Scheduled opening */}
           <div className="mt-3 flex flex-col gap-3 rounded-xl border border-border/40 bg-background/30 p-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <span className="flex items-center gap-2 text-sm font-medium">
                 <Timer className={cn("h-4 w-4", releaseMode === "scheduled" ? "text-primary" : "text-muted-foreground")} />
-                Time-lock release
+                Scheduled opening
               </span>
               <div className="flex gap-2">
                 {(["now", "scheduled"] as const).map((mode) => (
@@ -323,7 +380,7 @@ export default function Home() {
                         : "border border-border/50 bg-background/40 text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    {mode === "now" ? "Release now" : "Scheduled"}
+                    {mode === "now" ? "Openable right away" : "At a set time"}
                   </button>
                 ))}
               </div>
@@ -340,18 +397,18 @@ export default function Home() {
                   aria-label="Release date and time"
                 />
                 <p className="text-[11px] text-muted-foreground">
-                  Shares can be delivered now, but no one can open this drop until that time.
+                  Share the link whenever you like — nobody can open it before this time.
                 </p>
               </div>
             )}
           </div>
 
-          {/* Dead Man's Switch */}
+          {/* Delete if I go silent */}
           <div className="mt-3 flex flex-col gap-3 rounded-xl border border-border/40 bg-background/30 p-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <span className="flex items-center gap-2 text-sm font-medium">
                 <HeartPulse className={cn("h-4 w-4", deadManEnabled ? "text-red-400" : "text-muted-foreground")} />
-                Dead man&apos;s switch
+                Delete if I stop checking in
               </span>
               <button
                 type="button"
@@ -375,12 +432,12 @@ export default function Home() {
             {deadManEnabled && (
               <div className="flex flex-col gap-2">
                 <label className="flex items-center gap-2 text-sm">
-                  <span className="text-xs text-muted-foreground">Self-destructs unless I renew every</span>
+                  <span className="text-xs text-muted-foreground">Self-destructs unless I press &ldquo;Renew&rdquo; at least every</span>
                   <select
                     value={renewalWindowMinutes}
                     onChange={(e) => setRenewalWindowMinutes(Number(e.target.value))}
                     className="rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    aria-label="Renewal window"
+                    aria-label="Check-in interval"
                   >
                     <option value={1}>1 minute</option>
                     <option value={10}>10 minutes</option>
@@ -390,8 +447,7 @@ export default function Home() {
                   </select>
                 </label>
                 <p className="text-[11px] text-muted-foreground">
-                  If you stop renewing on the dispatch board, every copy of this secret is destroyed —
-                  it can never be opened by anyone.
+                  If you miss a check-in on the dashboard, every copy of this secret is deleted — nobody can open it, ever.
                 </p>
               </div>
             )}

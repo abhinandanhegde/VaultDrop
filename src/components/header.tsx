@@ -29,7 +29,7 @@ export default function Header() {
             Drop a secret
           </Link>
           <a
-            href="https://github.com/quadsquad/vaultdrop"
+            href="https://github.com/abhinandanhegde/VaultDrop"
             className="text-sm font-medium hover:text-primary transition-colors"
             target="_blank"
             rel="noopener noreferrer"
