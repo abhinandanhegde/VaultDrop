@@ -19,7 +19,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       .select(`
         id, name, status, view_count, opened_at, created_at,
         deliveries (
-          id, title, content_type, status, max_views, expires_at, burn_after_reading, release_at, renewal_deadline
+          id, title, content_type, status, max_views, expires_at, burn_after_reading, release_at, renewal_deadline, pin_scheme
         )
       `)
       .eq("url_token", token)
@@ -114,6 +114,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         title: delivery.title,
         contentType: delivery.content_type,
         deliveryStatus: delivery.status,
+        pinScheme: delivery.pin_scheme ?? "raw",
         maxViews: delivery.max_views,
         expiresAt: delivery.expires_at,
         releaseAt: delivery.release_at,

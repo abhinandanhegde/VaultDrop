@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { hashPIN } from "@/lib/bcrypt";
-import { generateDeliveryId, ITERATIONS } from "@/lib/crypto";
+import { generateDeliveryId, isHashedPin, ITERATIONS } from "@/lib/crypto";
 import { createRateLimiter, clientIp } from "@/lib/ratelimit";
 
 const RATE_LIMIT_MAX = 10; // max creations per IP per hour
@@ -21,7 +21,9 @@ interface RecipientInput {
 
 function validateRecipient(r: RecipientInput): string | null {
   if (!r || typeof r !== "object") return "Invalid recipient entry";
-  if (typeof r.pin !== "string" || r.pin.length !== 6 || !/^\d{6}$/.test(r.pin)) {
+  // Accepts a raw 6-digit PIN (legacy clients) or the preferred transport
+  // form, SHA-256(pin) hex — which keeps the raw PIN client-side only.
+  if (typeof r.pin !== "string" || !/^(?:\d{6}|[0-9a-f]{64})$/.test(r.pin)) {
     return "Each recipient needs a 6-digit numeric PIN";
   }
   if (!r.encryptedData || !r.nonce || !r.salt) {
@@ -143,6 +145,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // PIN transport scheme: all recipients must use the same form. When pins
+    // arrive as SHA-256 digests the raw PIN never reaches the server, so the
+    // stored salt+iterations are useless without the client.
+    const pinScheme = recipientList.some((r) => isHashedPin(r.pin)) ? "sha256" : "raw";
+    if (pinScheme === "sha256" && recipientList.some((r) => !isHashedPin(r.pin))) {
+      return NextResponse.json(
+        { status: "error", message: "All recipients must use the same PIN format" },
+        { status: 400 },
+      );
+    }
+
     // Rate limiting
     const ip = clientIp(request);
     if (!checkRateLimit(ip)) {
@@ -169,6 +182,7 @@ export async function POST(request: NextRequest) {
         salt: recipientList.length === 1 ? first.salt : null,
         iterations: first.iterations ?? ITERATIONS,
         pin_hash: firstPinHash,
+        pin_scheme: pinScheme,
         max_views: maxViews,
         expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
         release_at: releaseAt ? new Date(releaseAt).toISOString() : null,

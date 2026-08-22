@@ -14,6 +14,26 @@ const MAX_PIN_ATTEMPTS = 5;     // Max failed PIN attempts before locking
 const PBKDF2_ALGORITHM = "SHA-256";
 
 // =====================================================
+// PIN transport hashing
+// =====================================================
+
+// SHA-256 of the PIN, hex-encoded. Sent to the server INSTEAD OF the raw PIN
+// on create/access so the server (which stores salt + iterations) can never
+// derive the PBKDF2 key itself. Decryption still uses the raw PIN locally.
+export async function hashPinForTransport(pin: string): Promise<string> {
+  const subtle = getSubtle();
+  const digest = await subtle.digest("SHA-256", toArrayBuffer(stringToArrayBuffer(pin)));
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// True if the value looks like a SHA-256 hex digest (transport-hashed PIN)
+export function isHashedPin(value: string): boolean {
+  return /^[0-9a-f]{64}$/.test(value);
+}
+
+// =====================================================
 // Random generation
 // =====================================================
 

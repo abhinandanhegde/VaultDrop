@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { CopyButton } from "@/components/copy-button";
-import { decryptSecret } from "@/lib/crypto";
+import { decryptSecret, hashPinForTransport } from "@/lib/crypto";
 
 type PageState = "loading" | "pin" | "decrypting" | "viewing" | "error" | "expired" | "revoked" | "locked" | "destroyed";
 
@@ -17,6 +17,7 @@ interface DeliveryMetadata {
   title?: string | null;
   contentType?: string;
   status: string;
+  pinScheme?: "raw" | "sha256";
   maxViews: number;
   expiresAt?: string | null;
   createdAt: string;
@@ -118,10 +119,16 @@ export default function AccessPage() {
     setError(null);
 
     try {
+      // Transport-hash the PIN for hashed-scheme drops so the raw PIN never
+      // reaches the server. Decryption below still uses the entered PIN.
+      const transportPin =
+        delivery?.pinScheme === "sha256"
+          ? await hashPinForTransport(enteredPin)
+          : enteredPin;
       const res = await fetch(`/api/delivery/${id}/access`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pin: enteredPin }),
+        body: JSON.stringify({ pin: transportPin }),
       });
 
       const data = await res.json();

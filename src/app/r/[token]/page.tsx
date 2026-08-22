@@ -9,7 +9,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { CopyButton } from "@/components/copy-button";
 import Envelope from "@/components/envelope";
 import PinInput from "@/components/pin-input";
-import { decryptSecret } from "@/lib/crypto";
+import { decryptSecret, hashPinForTransport } from "@/lib/crypto";
 
 type PageState = "loading" | "pin" | "opening" | "viewing" | "error" | "expired" | "revoked" | "locked" | "opened" | "not_released" | "deadman";
 
@@ -21,6 +21,7 @@ interface RecipientMeta {
   expiresAt?: string | null;
   releaseAt?: string | null;
   burnAfterReading: boolean;
+  pinScheme?: "raw" | "sha256";
 }
 
 export default function EnvelopePage() {
@@ -55,6 +56,7 @@ export default function EnvelopePage() {
           expiresAt: d.expiresAt,
           releaseAt: d.releaseAt,
           burnAfterReading: d.burnAfterReading,
+          pinScheme: d.pinScheme === "sha256" ? "sha256" : "raw",
         });
         if (d.state === "expired") setState("expired");
         else if (d.state === "revoked") setState("revoked");
@@ -76,10 +78,14 @@ export default function EnvelopePage() {
     setError(null);
 
     try {
+      // Transport-hash the PIN for hashed-scheme drops so the raw PIN never
+      // reaches the server. Decryption below still uses the raw PIN locally.
+      const transportPin =
+        meta?.pinScheme === "sha256" ? await hashPinForTransport(pin) : pin;
       const res = await fetch(`/api/recipients/${token}/access`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pin }),
+        body: JSON.stringify({ pin: transportPin }),
       });
       const data = await res.json();
 

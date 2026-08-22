@@ -35,13 +35,15 @@ cp .env.local.example .env.local
 # Set up Supabase (free tier)
 # 1. Go to https://supabase.com
 # 2. Create new project
-# 3. Run ALL SQL files in supabase/migrations/ IN ORDER (001 through 006).
+# 3. Run ALL SQL files in supabase/migrations/ IN ORDER (001 through 007).
 #    Migration 005 adds the atomic PostgreSQL functions
 #    (check_pin_rate_limit, consume_recipient_secret) required by the
 #    recipient access route — skipping it causes HTTP 500 on open.
 #    Migration 006 adds atomic failed-attempt counters
 #    (record_failed_attempt, record_failed_attempt_delivery) — the routes
 #    fall back to optimistic CAS without it, but the RPC is contention-proof.
+#    Migration 007 adds the pin_scheme column and makes the PIN rate limiter
+#    dual-mode; new drops hash PINs client-side (SHA-256) before transport.
 # 4. Copy project URL and anon key to .env.local
 # 5. Get service_role key from Project Settings > API
 

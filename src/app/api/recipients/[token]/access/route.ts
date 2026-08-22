@@ -39,7 +39,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       );
     }
 
-    if (!pin || typeof pin !== "string" || pin.length !== 6 || !/^\d{6}$/.test(pin)) {
+    // Accept either transport form: a 6-digit PIN (legacy scheme) or the
+    // SHA-256 hex digest of a PIN (hashed scheme). Wrong-scheme values simply
+    // fail bcrypt comparison with the same generic error as a wrong PIN.
+    if (!pin || typeof pin !== "string" || !/^(?:\d{6}|[0-9a-f]{64})$/.test(pin)) {
       return NextResponse.json(
         { status: "error", message: "Invalid PIN format" },
         { status: 400 },

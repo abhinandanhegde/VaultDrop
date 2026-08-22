@@ -32,13 +32,20 @@ the cipher is weak, but because **delivery is uncontrolled**.
 | Server can see | Server cannot see |
 |---|---|
 | Delivery ID (the URL path) | Decryption key |
-| bcrypt hash of each PIN | Raw PIN |
+| bcrypt hash of each PIN | Raw PIN (new drops: clients transmit only `SHA-256(pin)`; the server stores `bcrypt(sha256(pin))`, so it can never combine a known PIN with the stored salt/iterations to derive the key itself) |
 | AES-256-GCM ciphertext (per recipient) | Plaintext |
 | Access events, timestamps, IP hashes | Content of the secret |
 | Policy (expiry, burn-after-read, release time) | PBKDF2 salt alone is useless without the PIN |
 
 **Zero-knowledge property:** the server stores *only* ciphertext + hashes. Given the database
 in full, an attacker recovers ciphertext but no plaintext, no PIN, and no key.
+
+**PIN transport hashing (migration 007):** drops carry a `pin_scheme` column (`raw` for
+pre-existing drops, `sha256` for new ones). Clients read the scheme from the metadata
+endpoint and send the matching transport value; access endpoints accept either form and
+treat both as opaque bcrypt inputs, so wrong-scheme values fail exactly like a wrong PIN
+(no oracle). Pre-existing `raw` drops keep working unchanged but retain the older,
+weaker guarantee — they should be left to expire.
 
 ## 4. Attack Scenarios
 
@@ -93,7 +100,14 @@ in full, an attacker recovers ciphertext but no plaintext, no PIN, and no key.
   Both access routes fall back to optimistic CAS if the RPC is not deployed.
 - **Distributed rate limiting:** the failed-PIN window is evaluated by the
   `check_pin_rate_limit` SQL function against `access_events`, so limits hold across server
-  restarts and multiple instances (the in-memory limiter remains as a cheap first gate).
+  restarts and multiple instances (an in-memory limiter remains as a cheap first gate on the
+  legacy path). Migration 007 made the same RPC dual-mode: it accepts either a recipient
+  `url_token` or a legacy delivery id, so both access routes share identical throttling.
+- **PBKDF2 parameters:** 600,000 iterations of PBKDF2-HMAC-SHA256 with a unique 128-bit
+  salt per drop and 96-bit nonces. This matches OWASP's current recommendation for
+  PBKDF2-SHA256 (600k) and is defensible for a browser-only implementation; Web Crypto
+  offers no memory-hard KDF (Argon2id), which would be the alternative if the constraint
+  were ever lifted.
 
 ### 4.6 The sender goes silent / is compromised
 - **Impact:** a drop left alive indefinitely is one compromise away from leaking.
@@ -130,10 +144,16 @@ PrivateBin lacks.
 
 ## 8. Test Evidence
 
-- **51 of 52 automated API/e2e scenarios passing** (legacy, multi-recipient, time-lock,
-  lockout self-destruct, dead man's switch). The single failing assertion is a stale test
-  expectation in the time-lock suite (it predates single-recipient burn semantics); the
-  production behavior it flags is correct.
+- **82 of 83 automated API/e2e scenarios passing** across six suites (legacy, multi-recipient,
+  time-lock, lockout self-destruct, dead man's switch, security-hardening). The single
+  failing assertion is a stale test expectation in the time-lock suite (it predates
+  single-recipient burn semantics); the production behavior it flags is correct.
+- **Security-hardening suite** (`scripts/test-security-hardening.ts`, 31 scenarios) covers:
+  repeated wrong-PIN lockout with countdown and destruction; 12 parallel wrong PINs
+  (atomic counting — all counted, no 5xx); revoked-recipient denial (even with the correct
+  PIN); expired-drop denial; 8-way simultaneous open of a one-time secret (exactly one
+  winner, losers get 409/410/429, replay → 410); max-view enforcement; and plaintext-leak
+  scans of every API response.
 - Client crypto verified by round-trip tests (encrypt → decrypt reproduces plaintext).
 - All cryptographic randomness from the Web Crypto API (`crypto.getRandomValues` / `crypto.subtle`).
 - **Atomic consumption verified end-to-end** (Aug 2026) against the live Supabase project:

@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import {
   encryptSecret,
   generatePIN,
+  hashPinForTransport,
   ITERATIONS,
 } from "@/lib/crypto";
 
@@ -99,14 +100,17 @@ export default function Home() {
       const encrypted = await Promise.all(
         recipients.map((r) => encryptSecret(secret, r.pin, ITERATIONS)),
       );
-      const recipientPayload = recipients.map((r, i) => ({
-        name: r.name.trim() || null,
-        pin: r.pin,
-        encryptedData: encrypted[i].encryptedData,
-        nonce: encrypted[i].nonce,
-        salt: encrypted[i].salt,
-        iterations: encrypted[i].iterations,
-      }));
+      // Hash PINs for transport so the raw PIN never leaves the browser.
+      const recipientPayload = await Promise.all(
+        recipients.map(async (r, i) => ({
+          name: r.name.trim() || null,
+          pin: await hashPinForTransport(r.pin),
+          encryptedData: encrypted[i].encryptedData,
+          nonce: encrypted[i].nonce,
+          salt: encrypted[i].salt,
+          iterations: encrypted[i].iterations,
+        })),
+      );
 
       const expiresAt =
         expirySeconds > 0

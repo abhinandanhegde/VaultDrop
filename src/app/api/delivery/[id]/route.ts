@@ -16,7 +16,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     const { data, error } = await supabase
       .from("deliveries")
-      .select("id, title, content_type, status, max_views, expires_at, created_at, accessed_at, destroyed_at")
+      .select("id, title, content_type, status, max_views, expires_at, created_at, accessed_at, destroyed_at, pin_scheme")
       .eq("id", id)
       .single();
 
@@ -46,6 +46,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         title: data.title,
         contentType: data.content_type,
         status: data.status,
+        pinScheme: data.pin_scheme ?? "raw",
         maxViews: data.max_views,
         expiresAt: data.expires_at,
         createdAt: data.created_at,

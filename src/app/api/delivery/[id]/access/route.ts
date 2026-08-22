@@ -7,13 +7,41 @@ import { createRateLimiter, clientIp } from "@/lib/ratelimit";
 
 const checkPinRateLimit = createRateLimiter(5, 15 * 60 * 1000).allow;
 
+const PIN_RATE_LIMIT_MAX = 5;
+const PIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+
+// DB-backed sliding-window throttle (same RPC the recipient route uses).
+// Unlike the in-memory limiter it survives restarts and holds across
+// multiple server instances. Migration 007 made this RPC accept a direct
+// delivery id as well as a recipient url_token.
+async function checkPinRateLimitDb(supabase: ReturnType<typeof createClient>, id: string, ip: string): Promise<{ allowed: boolean; retryAfterMs?: number }> {
+  const windowStart = new Date(Date.now() - PIN_RATE_LIMIT_WINDOW_MS).toISOString();
+
+  const { data, error } = await supabase.rpc("check_pin_rate_limit", {
+    p_token: id,
+    p_ip: ip,
+    p_window_start: windowStart,
+    p_max_attempts: PIN_RATE_LIMIT_MAX,
+  });
+
+  if (error) {
+    console.error("Rate limit check error:", error);
+    return { allowed: true };
+  }
+
+  return data as { allowed: boolean; retryAfterMs?: number };
+}
+
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
     const body = await request.json();
     const { pin } = body;
 
-    if (!pin || typeof pin !== "string" || pin.length !== 6) {
+    // Accept either transport form: a 6-digit PIN (legacy scheme) or the
+    // SHA-256 hex digest of a PIN (hashed scheme). Wrong-scheme values simply
+    // fail bcrypt comparison with the same generic error as a wrong PIN.
+    if (!pin || typeof pin !== "string" || !/^(?:\d{6}|[0-9a-f]{64})$/.test(pin)) {
       return NextResponse.json(
         { status: "error", message: "Invalid PIN format" },
         { status: 400 },
@@ -27,7 +55,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       );
     }
 
-    // Rate limit PIN attempts
+    // Rate limit PIN attempts (cheap in-memory first gate)
     const ip = clientIp(request);
     const rateKey = `${id}:${ip}`;
     if (!checkPinRateLimit(rateKey)) {
@@ -38,6 +66,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
 
     const supabase = createClient();
+
+    // Distributed throttle (survives restarts, shared across instances)
+    const rateLimitDb = await checkPinRateLimitDb(supabase, id, ip);
+    if (!rateLimitDb.allowed) {
+      const headers: Record<string, string> = {};
+      if (rateLimitDb.retryAfterMs) {
+        headers["Retry-After"] = String(Math.ceil((rateLimitDb.retryAfterMs || 0) / 1000));
+      }
+      return NextResponse.json(
+        { status: "error", message: "Too many attempts. Please try again later." },
+        { status: 429, headers },
+      );
+    }
 
     // Fetch the delivery with its PIN hash and policy
     const { data: delivery, error: fetchError } = await supabase
@@ -112,6 +153,31 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       await logDeadManSwitch(supabase, delivery.id, ip);
       return NextResponse.json(
         { status: "error", message: "The sender stopped renewing this drop. It has self-destructed." },
+        { status: 410 },
+      );
+    }
+
+    // Lazy expiration: enforced BEFORE any PIN work so expired drops are
+    // wiped regardless of what PIN is presented (matches recipient route).
+    if (delivery.expires_at && new Date(delivery.expires_at) < new Date()) {
+      await supabase
+        .from("deliveries")
+        .update({ status: "expired" })
+        .eq("id", id);
+
+      await supabase.from("access_events").insert({
+        delivery_id: id,
+        event_type: "expired",
+        metadata: { ip },
+      });
+
+      await supabase
+        .from("deliveries")
+        .update({ encrypted_data: null, nonce: null, salt: null, pin_hash: null })
+        .eq("id", id);
+
+      return NextResponse.json(
+        { status: "error", message: "This delivery has expired" },
         { status: 410 },
       );
     }
@@ -198,33 +264,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
 
     // PIN is valid — serve the encrypted data
-    // Check if expired
-    if (delivery.expires_at) {
-      const expiry = new Date(delivery.expires_at);
-      if (expiry < new Date()) {
-        await supabase
-          .from("deliveries")
-          .update({ status: "expired" })
-          .eq("id", id);
-
-        await supabase.from("access_events").insert({
-          delivery_id: id,
-          event_type: "expired",
-          metadata: { ip },
-        });
-
-        // Delete encrypted data
-        await supabase
-          .from("deliveries")
-          .update({ encrypted_data: null, nonce: null, salt: null, pin_hash: null })
-          .eq("id", id);
-
-        return NextResponse.json(
-          { status: "error", message: "This delivery has expired" },
-          { status: 410 },
-        );
-      }
-    }
 
     // Log successful PIN validation
     await supabase.from("access_events").insert({
