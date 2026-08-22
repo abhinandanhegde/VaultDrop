@@ -19,7 +19,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       .select(`
         id, name, status, view_count, opened_at, created_at,
         deliveries (
-          id, title, content_type, status, max_views, expires_at, burn_after_reading, release_at, renewal_deadline, pin_scheme
+          id, title, content_type, status, max_views, expires_at, burn_after_reading, release_at, renewal_deadline, pin_scheme,
+          kind, file_name, file_mime, file_size
         )
       `)
       .eq("url_token", token)
@@ -121,6 +122,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         burnAfterReading: delivery.burn_after_reading,
         createdAt: data.created_at,
         openedAt: data.opened_at,
+        kind: delivery.kind ?? "text",
+        fileName: delivery.file_name ?? null,
+        fileMime: delivery.file_mime ?? null,
+        fileSize: delivery.file_size ?? null,
       },
     });
   } catch (error) {

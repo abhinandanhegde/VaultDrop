@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { wipeRecipientCopies } from "@/lib/deadman";
+import { removeDeliveryFile } from "@/lib/storage";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -70,6 +71,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     // Wipe every per-recipient copy so no ciphertext lingers at rest
     await wipeRecipientCopies(supabase, id);
+
+    // The whole delivery is dead — delete its encrypted blob if it had one.
+    await removeDeliveryFile(supabase, id);
 
     // Log the revocation
     await supabase.from("access_events").insert({

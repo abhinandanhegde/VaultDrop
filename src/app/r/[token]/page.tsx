@@ -2,14 +2,20 @@
 
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
-import { Eye, EyeOff, AlertTriangle, Clock, Timer, HeartPulse } from "lucide-react";
+import { Eye, EyeOff, AlertTriangle, Clock, Timer, HeartPulse, FileText, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { CopyButton } from "@/components/copy-button";
 import Envelope from "@/components/envelope";
 import PinInput from "@/components/pin-input";
-import { decryptSecret, hashPinForTransport } from "@/lib/crypto";
+import {
+  decryptSecret,
+  hashPinForTransport,
+  unwrapFileKeyWithPin,
+  decryptBytesWithRawKey,
+  base64UrlDecode,
+} from "@/lib/crypto";
 
 type PageState = "loading" | "pin" | "opening" | "viewing" | "error" | "expired" | "revoked" | "locked" | "opened" | "not_released" | "deadman";
 
@@ -22,6 +28,17 @@ interface RecipientMeta {
   releaseAt?: string | null;
   burnAfterReading: boolean;
   pinScheme?: "raw" | "sha256";
+  kind?: "text" | "file";
+  fileName?: string | null;
+  fileMime?: string | null;
+  fileSize?: number | null;
+}
+
+interface DecryptedFile {
+  url: string;
+  name: string;
+  mime: string;
+  size: number;
 }
 
 export default function EnvelopePage() {
@@ -34,8 +51,15 @@ export default function EnvelopePage() {
   const [remaining, setRemaining] = useState<number | null>(null);
   const [pinAttempt, setPinAttempt] = useState(0);
   const [content, setContent] = useState("");
+  const [file, setFile] = useState<DecryptedFile | null>(null);
   const [show, setShow] = useState(false);
   const [opened, setOpened] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (file) URL.revokeObjectURL(file.url);
+    };
+  }, [file]);
 
   useEffect(() => {
     if (!token) return;
@@ -57,6 +81,10 @@ export default function EnvelopePage() {
           releaseAt: d.releaseAt,
           burnAfterReading: d.burnAfterReading,
           pinScheme: d.pinScheme === "sha256" ? "sha256" : "raw",
+          kind: d.kind === "file" ? "file" : "text",
+          fileName: d.fileName,
+          fileMime: d.fileMime,
+          fileSize: d.fileSize,
         });
         if (d.state === "expired") setState("expired");
         else if (d.state === "revoked") setState("revoked");
@@ -87,6 +115,38 @@ export default function EnvelopePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pin: transportPin }),
       });
+
+      // Encrypted-file drops answer with raw ciphertext + metadata headers.
+      const responseMime = res.headers.get("content-type") ?? "";
+      if (res.ok && responseMime.includes("application/octet-stream")) {
+        const metaB64 = res.headers.get("X-Vaultdrop-Meta");
+        if (!metaB64) throw new Error("Malformed file delivery response");
+        const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(metaB64)));
+        const cipherBytes = new Uint8Array(await res.arrayBuffer());
+
+        // Recover the content key locally, then decrypt — all in-browser.
+        const fileKey = await unwrapFileKeyWithPin(
+          header.wrapped.e,
+          header.wrapped.n,
+          header.wrapped.s,
+          header.wrapped.it,
+          pin,
+        );
+        const plain = await decryptBytesWithRawKey(cipherBytes, fileKey, header.iv);
+
+        const blob = new Blob([plain as unknown as BlobPart], { type: header.mime });
+        setFile({
+          url: URL.createObjectURL(blob),
+          name: header.fileName,
+          mime: header.mime,
+          size: header.size ?? plain.byteLength,
+        });
+        setContent("");
+        setOpened(Boolean(header.destroyed));
+        setState("viewing");
+        return;
+      }
+
       const data = await res.json();
 
       if (!res.ok || data.status === "error") {
@@ -120,6 +180,18 @@ export default function EnvelopePage() {
       setError(err instanceof Error ? err.message : "Failed to decrypt");
       setState("error");
     }
+  }
+
+  function formatBytes(bytes: number | null | undefined): string {
+    if (!bytes || bytes <= 0) return "—";
+    const units = ["B", "KB", "MB", "GB"];
+    let v = bytes;
+    let u = 0;
+    while (v >= 1024 && u < units.length - 1) {
+      v /= 1024;
+      u++;
+    }
+    return `${v % 1 === 0 ? v : v.toFixed(1)} ${units[u]}`;
   }
 
   function formatDate(s: string | null | undefined) {
@@ -215,6 +287,12 @@ export default function EnvelopePage() {
               )}
 
               <div className="mt-4 flex items-center justify-center gap-4 text-[11px] text-muted-foreground">
+                {meta?.kind === "file" && (
+                  <span className="flex items-center gap-1">
+                    <FileText className="h-3 w-3" />
+                    File · {meta.fileSize ? formatBytes(meta.fileSize) : "size hidden"}
+                  </span>
+                )}
                 {meta?.expiresAt && (
                   <span className="flex items-center gap-1">
                     <Clock className="h-3 w-3" />
@@ -238,8 +316,65 @@ export default function EnvelopePage() {
           </div>
         )}
 
-        {/* Revealed */}
-        {state === "viewing" && (
+        {/* Revealed — file */}
+        {state === "viewing" && file && (
+          <div className="animate-pop-in">
+            <div className="mb-4 flex flex-col items-center gap-3">
+              <Envelope size="md" open />
+              <div className="text-center">
+                <p className="text-xs uppercase tracking-widest text-green-400">
+                  Seal broken
+                </p>
+                <h1 className="text-lg font-bold">{meta?.title || "Your secret"}</h1>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-border/60 bg-card/70 p-5 backdrop-blur">
+              <div className="flex items-center gap-4">
+                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl border border-border/50 bg-muted/40">
+                  <FileText className="h-6 w-6 text-primary" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate font-semibold">{file.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatBytes(file.size)} · decrypted in your browser
+                  </p>
+                </div>
+              </div>
+
+              <a
+                href={file.url}
+                download={file.name}
+                className="mt-5"
+                aria-label="Download File"
+              >
+                <Button className="w-full h-11 rounded-xl font-semibold">
+                  <Download className="mr-2 h-4 w-4" />
+                  Download File
+                </Button>
+              </a>
+
+              {opened && (
+                <p className="mt-3 text-center text-[11px] text-muted-foreground">
+                  The encrypted copy on the server has been deleted. This local
+                  copy is yours to keep or remove.
+                </p>
+              )}
+            </div>
+
+            {opened && (
+              <div className="mt-4 rounded-xl border border-orange-500/20 bg-orange-500/5 px-4 py-3 text-center text-sm">
+                <strong className="text-orange-400">This drop has been destroyed.</strong>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Nothing remains on the server. It can never be opened again.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Revealed — text */}
+        {state === "viewing" && !file && (
           <div className="animate-pop-in">
             <div className="mb-4 flex flex-col items-center gap-3">
               <Envelope size="md" open />

@@ -4,7 +4,7 @@
 
 ## 1. Overview
 
-VaultDrop treats a shared secret not as static content but as a **controlled delivery** governed by explicit conditions:
+VaultDrop treats shared content — a text secret or an uploaded file — not as static data but as a **controlled delivery** governed by explicit conditions:
 
 - **Who** can access it
 - **How** access is authenticated
@@ -35,7 +35,7 @@ A **delivery** is the central domain object. Each delivery may contain:
 
 | Field Group | Contents |
 |---|---|
-| Payload | Encrypted payload + cryptographic parameters |
+| Payload | Encrypted payload (`text` secret or `file` ciphertext) + cryptographic parameters; file deliveries additionally reference an encrypted Storage blob |
 | Authentication | PIN configuration |
 | Recipients | Per-recipient access configuration |
 | Policy | Max view count, expiration, release time, burn-after-reading |
@@ -52,6 +52,8 @@ Content is encrypted **before transmission**, using:
 - Per-delivery salt + unique GCM nonce
 
 The database stores only ciphertext and cryptographic parameters — never plaintext. Security claims are validated against the implementation and deployment configuration, not assumed from the schema alone.
+
+File deliveries use **envelope encryption** on top of the same primitives: the browser generates a fresh random 256-bit content key that encrypts the file once (AES-256-GCM), then wraps that content key once per recipient with the same PBKDF2-derived-key construction used for text secrets. Each recipient unwraps their copy of the key locally after PIN validation. The raw content key never leaves the creator's browser, and the server handles ciphertext only — stored as opaque `application/octet-stream` objects in a private Storage bucket under randomized paths, so even object paths reveal nothing about the original filename.
 
 ## 6. Recipient-Specific Access
 
@@ -91,7 +93,7 @@ Time-lock is enforced in the server-side access flow, never by frontend state al
 | **Burn After Reading** | Unavailable after its permitted access |
 | **Revocation** | Creator recalls an active delivery |
 | **Recipient Revocation** | Individual recipient access revoked independently |
-| **Destruction** | Encrypted payload removed from the active record |
+| **Destruction** | Encrypted payload removed from the active record; encrypted file blobs deleted from Storage |
 
 ## 10. Dead-Man's Switch
 
@@ -123,12 +125,18 @@ A dedicated event model records lifecycle activity without ever including plaint
 
 ## 13. Database Architecture
 
-PostgreSQL via Supabase, two primary tables:
+PostgreSQL via Supabase, primary tables:
 
 | Table | Stores | Notes |
 |---|---|---|
-| `deliveries` | ID, encrypted payload, crypto parameters, PIN hash, access policy, lifecycle status, metadata, timestamps | Indexed on commonly accessed fields |
+| `deliveries` | ID, encrypted payload, crypto parameters, PIN scheme/hash, access policy, lifecycle status, metadata, timestamps | File deliveries add `kind`, file name/MIME/size, `storage_path`, `file_nonce`, and `enc_version`; indexed on commonly accessed fields |
+| `recipients` | Per-recipient encrypted copies: wrapped key material, URL token, PIN hash, view count, lockout state | One row per recipient; independent consumption and revocation |
 | `access_events` | Event ID, delivery reference, event type, timestamp, metadata | Indexed likewise |
+
+Encrypted file payloads live outside PostgreSQL in a **private** Supabase Storage bucket
+(`vaultdrop-files`) that stores only `application/octet-stream` ciphertext objects at
+randomized paths. The bucket is reachable exclusively through service-role credentials held
+by server-side routes — no public URLs, no anon-key policies.
 
 Row Level Security is enabled on protected tables.
 
@@ -163,7 +171,10 @@ Cryptographic operations · Password/PIN hashing · Rate limiting · Dead-man's-
 
 Targeted test scripts cover:
 
-Dead-man's-switch behavior · Lockout behavior · Multi-recipient access · Time-locked release · Legacy behavior
+Legacy behavior · Multi-recipient access · Time-locked release · Lockout self-destruct · Dead-man's-switch behavior · Security hardening (concurrency races, lockout, plaintext-leak scans) · Encrypted file delivery (round trips, size/type limits, lifecycle blob deletion, private-bucket denial)
+
+Current status: **125 of 126 automated scenarios pass**; the sole failure is a stale test
+expectation documented in the threat model (§8).
 
 Security testing validates that policies are enforced at the **application and database boundaries**, not solely via frontend restrictions.
 
@@ -172,8 +183,8 @@ Security testing validates that policies are enforced at the **application and d
 | Layer | Technologies |
 |---|---|
 | Application | Next.js, React, TypeScript, Tailwind CSS |
-| Backend | Next.js API Routes, Supabase, PostgreSQL |
-| Security | AES-256-GCM, PBKDF2, bcrypt, Row Level Security, Rate Limiting |
+| Backend | Next.js API Routes, Supabase (PostgreSQL + Storage), Vercel |
+| Security | AES-256-GCM, PBKDF2, bcrypt, Envelope Encryption (files), Row Level Security, Rate Limiting |
 | Deployment | Vercel, Supabase |
 
 ## 19. Engineering Objectives

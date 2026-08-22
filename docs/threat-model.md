@@ -21,9 +21,12 @@ the cipher is weak, but because **delivery is uncontrolled**.
 
 ## 2. Assets We Protect
 
-1. **The secret plaintext** — only ever exists in the creator's and recipient's browsers.
+1. **The secret plaintext** (text or file contents) — only ever exists in the creator's and
+   recipients' browsers. For files, this includes the decrypted bytes on either end; the
+   server only ever handles AES-256-GCM ciphertext.
 2. **The decryption key** — derived client-side from the recipient's PIN via PBKDF2-SHA256.
-   Never transmitted. Never stored.
+   Files add a random 256-bit content key wrapped per recipient with that same derivation;
+   the raw content key is never transmitted or stored. Never transmitted. Never stored.
 3. **Recipient identity** — the mapping of "who opened what" is visible only to the creator
    (protected by a creator token that is not the delivery ID).
 
@@ -46,6 +49,20 @@ endpoint and send the matching transport value; access endpoints accept either f
 treat both as opaque bcrypt inputs, so wrong-scheme values fail exactly like a wrong PIN
 (no oracle). Pre-existing `raw` drops keep working unchanged but retain the older,
 weaker guarantee — they should be left to expire.
+
+**Encrypted file delivery (migration 008):** files use envelope encryption on top of the
+same primitives. The browser generates a random 256-bit content key (DEK), encrypts the
+file once with AES-256-GCM and a fresh IV, wraps the DEK for each recipient with the
+identical PBKDF2 construction used for text, and uploads only ciphertext — stored as
+opaque `application/octet-stream` objects in the **private** `vaultdrop-files` Storage
+bucket under randomized paths (`deliveries/<id>/<random>.bin`; original filenames never
+appear in paths). The server streams ciphertext to authorized recipients after the same
+PIN/policy/view-count checks as text; the wrapped DEK rides in a response header so the
+browser decrypts locally. Plaintext files and raw DEKs never reach the server. The blob
+is deleted with the rest of the drop's lifecycle: burn-after-read (once every
+consumable copy is gone), expiry, revocation, PIN lockout, dead-man's switch, creator
+delete, and the purge cron sweeps stragglers. A file retrieval consumes a view exactly
+like a text open.
 
 ## 4. Attack Scenarios
 
@@ -133,6 +150,10 @@ weaker guarantee — they should be left to expire.
 - The creator's own device being compromised.
 - Recipients colluding (a recipient who legitimately has the PIN can read it).
 - Physical coercion / rubber-hose attacks.
+- **Files already saved by a recipient.** Revocation, expiry, and burn-after-read delete
+  everything on the server — including encrypted file blobs — but cannot reach a file a
+  recipient has already downloaded to their device. This is true of every delivery system;
+  for VaultDrop it means file drops should go only to recipients you trust with their own copy.
 
 ## 7. Why Client-Side Encryption (ADR)
 
@@ -154,14 +175,25 @@ PrivateBin lacks.
   PIN); expired-drop denial; 8-way simultaneous open of a one-time secret (exactly one
   winner, losers get 409/410/429, replay → 410); max-view enforcement; and plaintext-leak
   scans of every API response.
+- **File-delivery suite** (`scripts/test-file-delivery.ts`, 43 scenarios, Aug 2026) covers:
+  client-side round trips (random bytes, PDF, PNG — byte-exact after decrypt); wrong-PIN
+  content-key unwrapping rejected; oversized uploads rejected (HTTP 413) before any storage
+  write; disallowed MIME types rejected (HTTP 415); authorized retrieval streams ciphertext
+  that decrypts byte-for-byte; stored Storage objects contain only ciphertext (a
+  plaintext-marker scan finds no original bytes); the encrypted blob is deleted exactly when
+  the last consumable copy goes — verified for burn-after-read, expiry, revoke-all-recipients,
+  and PIN lockout; a 6-way simultaneous-open race produces exactly one winner; private-bucket
+  probes confirm anonymous access fails via public URL, direct fetch, and the anon-key client;
+  and the text flow still passes end-to-end afterwards.
 - Client crypto verified by round-trip tests (encrypt → decrypt reproduces plaintext).
 - All cryptographic randomness from the Web Crypto API (`crypto.getRandomValues` / `crypto.subtle`).
 - **Atomic consumption verified end-to-end** (Aug 2026) against the live Supabase project:
   valid PIN → 200 + ciphertext returned + copy burned in the same transaction;
   immediate replay → 410 Gone; unknown token → structured 404; expired drop → 410 with
-  lazy expiry applied. Migrations `005_atomic_operations.sql` (advisory-lock consumption +
-  DB-side rate limiting) and `006_atomic_failed_attempts.sql` (atomic failed-attempt
-  counters) are applied to production.
+  lazy expiry applied.   Migrations `005_atomic_operations.sql` (advisory-lock consumption +
+  DB-side rate limiting), `006_atomic_failed_attempts.sql` (atomic failed-attempt counters),
+  `007_pin_transport_hashing.sql` (PIN transport hashing), and `008_file_delivery.sql`
+  (file-delivery schema + private Storage bucket) are applied to production.
 - **Concurrency probes under load** (Aug 2026):
   - Recipient path: 20 simultaneous valid-PIN opens → exactly one 200 with ciphertext;
     losers receive 409/410 (never an empty success).

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { removeEncryptedObject } from "@/lib/storage";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -45,6 +46,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       metadata: { reason: "creator_deleted" },
     });
 
+    // Capture the blob reference before the row disappears
+    const { data: pathRow } = await supabase
+      .from("deliveries")
+      .select("storage_path")
+      .eq("id", id)
+      .single();
+
     // Permanently delete
     const { error: deleteError } = await supabase
       .from("deliveries")
@@ -57,6 +65,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         { status: "error", message: "Failed to delete delivery" },
         { status: 500 },
       );
+    }
+
+    if (pathRow?.storage_path) {
+      await removeEncryptedObject(supabase, pathRow.storage_path);
     }
 
     return NextResponse.json({

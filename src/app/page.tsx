@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Lock, Plus, X, RefreshCw, User, Flame, Clock, Timer, HeartPulse, Eye } from "lucide-react";
+import { Lock, Plus, X, RefreshCw, User, Flame, Clock, Timer, HeartPulse, Eye, FileText, Paperclip, UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -11,6 +11,9 @@ import {
   encryptSecret,
   generatePIN,
   hashPinForTransport,
+  generateFileKey,
+  encryptBytesWithRawKey,
+  wrapFileKeyForRecipient,
   ITERATIONS,
 } from "@/lib/crypto";
 
@@ -24,6 +27,18 @@ const EXPIRY_OPTIONS = [
 ] as const;
 
 const MAX_RECIPIENTS = 10;
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+function formatBytes(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let v = bytes;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${v % 1 === 0 ? v : v.toFixed(1)} ${units[u]}`;
+}
 
 interface RecipientDraft {
   id: number;
@@ -37,6 +52,10 @@ export default function Home() {
   const [title, setTitle] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sendMode, setSendMode] = useState<"secret" | "file">("secret");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [recipients, setRecipients] = useState<RecipientDraft[]>([
     { id: 0, name: "", pin: "" },
@@ -86,8 +105,17 @@ export default function Home() {
   };
 
   const handleDrop = async () => {
-    if (!secret.trim()) {
+    if (sendMode === "secret" && !secret.trim()) {
       setError("Type or paste a secret first.");
+      return;
+    }
+    if (sendMode === "file" && !selectedFile) {
+      setError("Choose a file first.");
+      return;
+    }
+    // Reject oversized files BEFORE any encryption or upload work.
+    if (sendMode === "file" && selectedFile && selectedFile.size > MAX_FILE_BYTES) {
+      setError(`That file is ${formatBytes(selectedFile.size)} — the limit is ${formatBytes(MAX_FILE_BYTES)}.`);
       return;
     }
     if (!title.trim()) {
@@ -103,49 +131,94 @@ export default function Home() {
     setIsLoading(true);
 
     try {
-      // Encrypt in parallel (PBKDF2 is CPU-bound; parallel avoids serial stalls)
-      const encrypted = await Promise.all(
-        recipients.map((r) => encryptSecret(secret, r.pin, ITERATIONS)),
-      );
-      // Hash PINs for transport so the raw PIN never leaves the browser.
-      const recipientPayload = await Promise.all(
-        recipients.map(async (r, i) => ({
-          name: r.name.trim() || null,
-          pin: await hashPinForTransport(r.pin),
-          encryptedData: encrypted[i].encryptedData,
-          nonce: encrypted[i].nonce,
-          salt: encrypted[i].salt,
-          iterations: encrypted[i].iterations,
-        })),
-      );
-
       const expiresAt =
         expirySeconds > 0
           ? new Date(Date.now() + expirySeconds * 1000).toISOString()
           : null;
 
-      const res = await fetch("/api/delivery", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-        recipients: recipientPayload,
-        maxViews: burnAfterReading ? 1 : maxViews,
+      let response: Response;
+
+      if (sendMode === "secret") {
+        // Encrypt in parallel (PBKDF2 is CPU-bound; parallel avoids serial stalls)
+        const encrypted = await Promise.all(
+          recipients.map((r) => encryptSecret(secret, r.pin, ITERATIONS)),
+        );
+        // Hash PINs for transport so the raw PIN never leaves the browser.
+        const recipientPayload = await Promise.all(
+          recipients.map(async (r, i) => ({
+            name: r.name.trim() || null,
+            pin: await hashPinForTransport(r.pin),
+            encryptedData: encrypted[i].encryptedData,
+            nonce: encrypted[i].nonce,
+            salt: encrypted[i].salt,
+            iterations: encrypted[i].iterations,
+          })),
+        );
+
+        response = await fetch("/api/delivery", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+          recipients: recipientPayload,
+          maxViews: burnAfterReading ? 1 : maxViews,
+            expiresAt,
+            releaseAt: releaseValue(),
+            renewalWindowMinutes: deadManEnabled ? renewalWindowMinutes : null,
+            burnAfterReading,
+            title,
+            contentType: "text/plain",
+          }),
+        });
+      } else {
+        // File mode: encrypt locally with a random content key, wrap that key
+        // for each recipient PIN. Only ciphertext ever leaves this browser.
+        const dek = generateFileKey();
+        const plainBytes = new Uint8Array(await selectedFile!.arrayBuffer());
+        const { ciphertext, nonceB64 } = await encryptBytesWithRawKey(plainBytes, dek);
+
+        const wrappedList = await Promise.all(
+          recipients.map((r) => wrapFileKeyForRecipient(dek, r.pin)),
+        );
+        dek.fill(0); // best-effort scrub of the local key material
+
+        const recipientPayload = await Promise.all(
+          recipients.map(async (r, i) => ({
+            name: r.name.trim() || null,
+            pin: await hashPinForTransport(r.pin),
+            wrapped: wrappedList[i],
+          })),
+        );
+
+        const form = new FormData();
+        form.append("meta", JSON.stringify({
+          recipients: recipientPayload,
+          maxViews: burnAfterReading ? 1 : maxViews,
           expiresAt,
           releaseAt: releaseValue(),
           renewalWindowMinutes: deadManEnabled ? renewalWindowMinutes : null,
           burnAfterReading,
           title,
-          contentType: "text/plain",
-        }),
-      });
+          fileName: selectedFile!.name,
+          fileMime: selectedFile!.type || "",
+          fileNonce: nonceB64,
+        }));
+        form.append("file", new Blob([ciphertext as unknown as BlobPart], { type: "application/octet-stream" }), "encrypted.bin");
 
-      const data = await res.json();
-      if (!res.ok || data.status === "error") {
+        response = await fetch("/api/delivery/file", {
+          method: "POST",
+          body: form,
+        });
+      }
+
+      const data = await response.json();
+      if (!response.ok || data.status === "error") {
         throw new Error(data.message || "Failed to create delivery");
       }
 
       // Wipe plaintext from memory, then move to the dispatch board
       setSecret("");
+      setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
       router.push(`/dashboard/${data.id}?token=${data.creatorToken}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -187,6 +260,53 @@ export default function Home() {
             </div>
           )}
 
+          {/* What are you sending? */}
+          <div className="mb-4">
+            <p className="mb-2 text-sm font-semibold">What are you sending?</p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Delivery type">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={sendMode === "secret"}
+                onClick={() => setSendMode("secret")}
+                className={cn(
+                  "flex items-start gap-3 rounded-xl border p-3 text-left transition-colors",
+                  sendMode === "secret"
+                    ? "border-primary/60 bg-primary/5"
+                    : "border-border/60 bg-background/40 hover:border-border",
+                )}
+              >
+                <span className="text-lg leading-none mt-0.5">🔐</span>
+                <span>
+                  <span className="block text-sm font-semibold">Send a Secret</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Text, passwords, credentials, notes
+                  </span>
+                </span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={sendMode === "file"}
+                onClick={() => setSendMode("file")}
+                className={cn(
+                  "flex items-start gap-3 rounded-xl border p-3 text-left transition-colors",
+                  sendMode === "file"
+                    ? "border-primary/60 bg-primary/5"
+                    : "border-border/60 bg-background/40 hover:border-border",
+                )}
+              >
+                <span className="text-lg leading-none mt-0.5">📎</span>
+                <span>
+                  <span className="block text-sm font-semibold">Send a Secure File</span>
+                  <span className="block text-xs text-muted-foreground">
+                    PDFs, images, documents, and more
+                  </span>
+                </span>
+              </button>
+            </div>
+          </div>
+
           {/* Label */}
           <Input
             value={title}
@@ -197,15 +317,88 @@ export default function Home() {
           />
 
           {/* Secret */}
-          <textarea
-            value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-            placeholder="Paste your secret here…"
-            rows={5}
-            autoFocus
-            className="mt-3 w-full resize-y rounded-xl border border-input bg-background/60 px-3 py-3 font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Secret content"
-          />
+          {sendMode === "secret" ? (
+            <textarea
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+              placeholder="Paste your secret here…"
+              rows={5}
+              autoFocus
+              className="mt-3 w-full resize-y rounded-xl border border-input bg-background/60 px-3 py-3 font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Secret content"
+            />
+          ) : selectedFile ? (
+            /* Selected file card */
+            <div
+              className={cn(
+                "mt-3 flex flex-col gap-3 rounded-xl border border-dashed border-primary/50 bg-primary/5 p-4 sm:flex-row sm:items-center sm:justify-between",
+              )}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <FileText className="h-8 w-8 flex-shrink-0 text-primary" />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">{selectedFile.name}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {formatBytes(selectedFile.size)} · {selectedFile.type || "unknown type"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-shrink-0 gap-2">
+                <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                  Replace
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Remove file"
+                  onClick={() => {
+                    setSelectedFile(null);
+                    if (fileInputRef.current) fileInputRef.current.value = "";
+                  }}
+                >
+                  Remove
+                </Button>
+              </div>
+            </div>
+          ) : (
+            /* Drop zone */
+            <label
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                const f = e.dataTransfer.files?.[0];
+                if (f) setSelectedFile(f);
+              }}
+              className={cn(
+                "mt-3 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-background/40 px-4 py-10 text-center transition-colors",
+                dragging ? "border-primary/70 bg-primary/10" : "border-border/70 hover:border-primary/40",
+              )}
+            >
+              <UploadCloud className="h-8 w-8 text-muted-foreground" />
+              <span className="text-sm font-medium">
+                Drop your file here, or <span className="text-primary underline underline-offset-2">browse</span>
+              </span>
+              <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                <Paperclip className="h-3 w-3" />
+                Encrypted in your browser before upload · Max {formatBytes(MAX_FILE_BYTES)} · PDF, PNG/JPG, DOC(X), TXT, ZIP…
+              </span>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="sr-only"
+                aria-label="Choose file"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) setSelectedFile(f);
+                }}
+              />
+            </label>
+          )}
 
           {/* Recipients */}
           <div className="mt-5">
@@ -458,12 +651,23 @@ export default function Home() {
             className="mt-4 w-full h-12 rounded-xl text-base font-semibold"
             size="lg"
             onClick={handleDrop}
-            disabled={isLoading || !secret.trim() || !title.trim()}
+            disabled={
+              isLoading ||
+              !title.trim() ||
+              (sendMode === "secret" ? !secret.trim() : !selectedFile)
+            }
           >
             {isLoading ? (
               <>
                 <Spinner className="mr-2 h-4 w-4" />
-                Sealing {recipients.length} envelope{recipients.length > 1 ? "s" : ""}…
+                {sendMode === "file"
+                  ? "Encrypting & uploading…"
+                  : `Sealing ${recipients.length} envelope${recipients.length > 1 ? "s" : ""}…`}
+              </>
+            ) : sendMode === "file" ? (
+              <>
+                <Lock className="mr-2 h-4 w-4" />
+                Create Secure Delivery
               </>
             ) : (
               <>

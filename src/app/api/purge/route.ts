@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { removeEncryptedObject } from "@/lib/storage";
 
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -46,10 +47,18 @@ export async function POST(request: NextRequest) {
       })
       .eq("status", "active")
       .or(`expires_at.lte.${now},renewal_deadline.lte.${now}`)
-      .select("id");
+      .select("id, storage_path");
 
     if (expireError) {
       errors.push(`expire: ${expireError.message}`);
+    }
+
+    // 1b. Delete encrypted file blobs for newly expired deliveries
+    const expiredPaths = (expired || [])
+      .map((d: { storage_path?: string | null }) => d.storage_path)
+      .filter((p): p is string => Boolean(p));
+    for (const p of expiredPaths) {
+      await removeEncryptedObject(supabase, p);
     }
 
     // 2. Wipe recipient copies belonging to expired/destroyed/revoked/locked deliveries
@@ -69,10 +78,19 @@ export async function POST(request: NextRequest) {
       .from("deliveries")
       .delete()
       .or(`and(status.eq.expired,destroyed_at.lte.${thirtyDaysAgo}),and(status.eq.destroyed,destroyed_at.lte.${thirtyDaysAgo}),and(status.eq.revoked,destroyed_at.lte.${thirtyDaysAgo})`)
-      .select("id");
+      .select("id, storage_path");
 
     if (cleanupError) {
       errors.push(`cleanup: ${cleanupError.message}`);
+    }
+
+    // 3b. Sweep any file blobs still referenced by deleted rows (e.g. rows
+    // revoked before blob cleanup existed).
+    const deletedPaths = (deleted || [])
+      .map((d: { storage_path?: string | null }) => d.storage_path)
+      .filter((p): p is string => Boolean(p));
+    for (const p of deletedPaths) {
+      await removeEncryptedObject(supabase, p);
     }
 
     // 4. Clean up old access events (older than 30 days)

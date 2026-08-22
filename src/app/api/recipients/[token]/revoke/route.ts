@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { removeDeliveryFileIfFullyConsumed } from "@/lib/storage";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   try {
@@ -92,6 +93,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       event_type: "revoked",
       metadata: { scope: "recipient" },
     });
+
+    // If this was the last consumable copy, the shared encrypted blob goes too.
+    await removeDeliveryFileIfFullyConsumed(supabase, recipient.delivery_id);
 
     return NextResponse.json({
       status: "ok",

@@ -259,6 +259,115 @@ export async function decryptSecret(
   return arrayBufferToString(plaintext);
 }
 
+// =====================================================
+// File encryption (envelope scheme)
+// =====================================================
+// A random 256-bit content key (DEK) encrypts the file once with AES-256-GCM
+// and a fresh nonce. The DEK is then wrapped for each recipient with the SAME
+// PBKDF2 -> AES-GCM construction used for text secrets, so each recipient
+// recovers it locally from their PIN alone. The raw DEK never reaches the
+// server; recipients.encrypted_data stores only the wrapped key, which means
+// all existing per-recipient security logic applies unchanged.
+
+export const FILE_KEY_LENGTH = KEY_LENGTH / 8; // 32 bytes
+
+export function generateFileKey(): Uint8Array {
+  return getRandomBytes(FILE_KEY_LENGTH);
+}
+
+async function importRawAesKey(raw: Uint8Array): Promise<CryptoKey> {
+  const subtle = getSubtle();
+  return subtle.importKey(
+    "raw",
+    toArrayBuffer(raw),
+    { name: "AES-GCM" },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+// Encrypt raw bytes with a raw AES-256-GCM key. A fresh nonce is generated
+// for every call and returned alongside the ciphertext.
+export async function encryptBytesWithRawKey(
+  data: Uint8Array,
+  rawKey: Uint8Array,
+): Promise<{ ciphertext: Uint8Array; nonceB64: string }> {
+  const subtle = getSubtle();
+  const key = await importRawAesKey(rawKey);
+  const nonce = generateNonce();
+  const ct = await subtle.encrypt(
+    { name: "AES-GCM", iv: toArrayBuffer(nonce), tagLength: 128 },
+    key,
+    toArrayBuffer(data),
+  );
+  return { ciphertext: new Uint8Array(ct), nonceB64: base64Encode(nonce) };
+}
+
+export async function decryptBytesWithRawKey(
+  ciphertext: Uint8Array,
+  rawKey: Uint8Array,
+  nonceB64: string,
+): Promise<Uint8Array> {
+  const subtle = getSubtle();
+  const key = await importRawAesKey(rawKey);
+  const plain = await subtle.decrypt(
+    { name: "AES-GCM", iv: toArrayBuffer(base64Decode(nonceB64)), tagLength: 128 },
+    key,
+    toArrayBuffer(ciphertext),
+  );
+  return new Uint8Array(plain);
+}
+
+// Wrap the file key for one recipient: identical construction to
+// encryptSecret but for a small binary payload. Produces exactly the row
+// shape already stored per-recipient (encryptedData/nonce/salt/iterations).
+export async function wrapFileKeyForRecipient(
+  fileKey: Uint8Array,
+  pin: string,
+  customIterations?: number,
+): Promise<{
+  encryptedData: string;
+  nonce: string;
+  salt: string;
+  iterations: number;
+}> {
+  const subtle = getSubtle();
+  const salt = generateSalt();
+  const nonce = generateNonce();
+  const iterations = customIterations || ITERATIONS;
+  const key = await deriveKey(pin, salt, iterations);
+  const wrapped = await subtle.encrypt(
+    { name: "AES-GCM", iv: toArrayBuffer(nonce), tagLength: 128 },
+    key,
+    toArrayBuffer(fileKey),
+  );
+  return {
+    encryptedData: base64Encode(new Uint8Array(wrapped)),
+    nonce: base64Encode(nonce),
+    salt: base64Encode(salt),
+    iterations,
+  };
+}
+
+// Recover the raw file key from a wrapped bundle using the recipient's PIN.
+// Throws on a wrong PIN (GCM authentication failure), like decryptSecret.
+export async function unwrapFileKeyWithPin(
+  encryptedDataB64: string,
+  nonceB64: string,
+  saltB64: string,
+  iterations: number,
+  pin: string,
+): Promise<Uint8Array> {
+  const subtle = getSubtle();
+  const key = await deriveKey(pin, base64Decode(saltB64), iterations);
+  const plain = await subtle.decrypt(
+    { name: "AES-GCM", iv: toArrayBuffer(base64Decode(nonceB64)), tagLength: 128 },
+    key,
+    toArrayBuffer(base64Decode(encryptedDataB64)),
+  );
+  return new Uint8Array(plain);
+}
+
 // Export constants for use elsewhere
 export {
   ITERATIONS,

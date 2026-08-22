@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { validatePIN } from "@/lib/bcrypt";
-import { MAX_PIN_ATTEMPTS } from "@/lib/crypto";
+import { MAX_PIN_ATTEMPTS, base64UrlEncode } from "@/lib/crypto";
 import { deadManTriggered, destroyForDeadManSwitch, wipeRecipientCopies, logDeadManSwitch } from "@/lib/deadman";
 import { clientIp } from "@/lib/ratelimit";
+import {
+  downloadEncryptedObject,
+  removeDeliveryFile,
+  removeDeliveryFileIfFullyConsumed,
+} from "@/lib/storage";
 
 const PIN_RATE_LIMIT_MAX = 5;
 const PIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
@@ -70,7 +75,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         id, delivery_id, pin_hash, encrypted_data, nonce, salt, iterations,
         status, failed_attempts, view_count, opened_at,
         deliveries (
-          id, title, content_type, status, max_views, expires_at, burn_after_reading, release_at, renewal_deadline
+          id, title, content_type, status, max_views, expires_at, burn_after_reading, release_at, renewal_deadline,
+          kind, file_name, file_mime, file_size, storage_path, file_nonce, enc_version
         )
       `)
       .eq("url_token", token)
@@ -119,6 +125,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (deadManTriggered(delivery.renewal_deadline)) {
       await destroyForDeadManSwitch(supabase, delivery.id);
       await wipeRecipientCopies(supabase, delivery.id);
+      // The whole drop is dead — the shared encrypted blob must not linger.
+      if (delivery.kind === "file") await removeDeliveryFile(supabase, delivery.id);
       await logDeadManSwitch(supabase, delivery.id, ip);
       return NextResponse.json(
         { status: "error", message: "This link is no longer valid" },
@@ -145,6 +153,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           event_type: "expired",
           metadata: { ip },
         });
+
+        if (delivery.kind === "file") await removeDeliveryFile(supabase, delivery.id);
 
         return NextResponse.json(
           { status: "error", message: "This link is no longer valid" },
@@ -225,6 +235,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           metadata: { reason: "pin_lockout", ip },
         });
 
+        if (delivery.kind === "file") {
+          await removeDeliveryFileIfFullyConsumed(supabase, delivery.id);
+        }
+
         return NextResponse.json(
           { status: "error", message: "Too many wrong PINs. This copy has been destroyed." },
           { status: 423 },
@@ -293,6 +307,61 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         { status: "error", message },
         { status: httpStatus },
       );
+    }
+
+    // ---- Encrypted-file serving -------------------------------------------
+    // The recipient's PIN was validated and the view consumed by the same
+    // RPC used for text secrets. The server streams only ciphertext; the
+    // wrapped content key rides in a response header so the browser can
+    // decrypt locally. Plaintext never exists on the server.
+    if (delivery.kind === "file") {
+      const meta = {
+        kind: "file" as const,
+        fileName: delivery.file_name ?? "file",
+        mime: delivery.file_mime ?? "application/octet-stream",
+        size: delivery.file_size,
+        iv: delivery.file_nonce,
+        enc: delivery.enc_version ?? 1,
+        wrapped: {
+          e: result.encrypted_data,
+          n: result.nonce,
+          s: result.salt,
+          it: result.iterations,
+        },
+        destroyed: Boolean(result.destroyed),
+        burnAfterReading: delivery.burn_after_reading,
+      };
+
+      const download = await downloadEncryptedObject(supabase, delivery.storage_path);
+      if (!download.data) {
+        console.error("File object missing:", download.error);
+        await supabase.from("access_events").insert({
+          delivery_id: delivery.id,
+          recipient_id: recipientId,
+          event_type: "destroyed",
+          metadata: { reason: "storage_object_missing", ip },
+        });
+        return NextResponse.json(
+          { status: "error", message: "This link is no longer valid" },
+          { status: 410 },
+        );
+      }
+
+      // Burn lifecycle for files mirrors text: once this recipient's copy is
+      // consumed and nobody else can still open it, delete the blob now.
+      if (result.destroyed) {
+        await removeDeliveryFileIfFullyConsumed(supabase, delivery.id);
+      }
+
+      const metaBytes = new TextEncoder().encode(JSON.stringify(meta));
+      return new Response(download.data, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Cache-Control": "no-store",
+          "X-Vaultdrop-Meta": base64UrlEncode(metaBytes),
+        },
+      });
     }
 
     if (result.destroyed) {
