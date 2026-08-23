@@ -1,201 +1,256 @@
 # VaultDrop — Technical Overview
 
-> A privacy-first platform for controlled information sharing with policy-driven access and lifecycle management.
+> Engineering reference for VaultDrop: a policy-driven controlled-delivery system for client-side-encrypted text secrets and files. Companion documents: [`../README.md`](../README.md) (product + setup) and [`threat-model.md`](threat-model.md) (strict threat analysis).
 
-## 1. Overview
+## 1. System Overview
 
-VaultDrop treats shared content — a text secret or an uploaded file — not as static data but as a **controlled delivery** governed by explicit conditions:
+VaultDrop treats shared content — a text secret or an uploaded file — not as static data but as a **controlled delivery**: a payload plus an explicit, server-enforced lifecycle. Creators define who may open it, how access is verified, when it becomes available, how many times it can be opened, and when it must be destroyed.
 
-- **Who** can access it
-- **How** access is authenticated
-- **When** it becomes available
-- **How many times** it can be accessed
-- **When** it expires, is revoked, or destroyed
-
-It combines client-side encryption, recipient-specific access, authenticated delivery, lifecycle enforcement, and audit events into a single workflow.
+All cryptography executes in the browser via the Web Crypto API. The backend (Next.js API routes over Supabase PostgreSQL + Storage) sees ciphertext, hashes, policy state, and audit events — never plaintext secrets, raw PINs (new drops), or decryption keys.
 
 ## 2. Design Principles
 
 | Principle | Meaning |
 |---|---|
-| **Privacy by Design** | Content is encrypted on the client before submission to the backend. |
-| **Controlled Access** | Every delivery defines its own authentication and access policy. |
-| **Limited Exposure** | View limits, expiration, burn-after-reading, and revocation reduce exposure time. |
-| **Explicit Lifecycle Management** | A delivery has a defined state machine rather than remaining permanently available. |
+| **Client-side encryption** | Content is encrypted before submission; decryption happens only on the recipient's device. |
+| **Controlled access** | Every delivery defines its own authentication and access policy. |
+| **Limited exposure** | View limits, burn-after-read, expiration, revocation, and lockout destruction minimize the lifetime of readable data. |
+| **Explicit lifecycle** | A delivery is a state machine (`active → accessed/locked/expired/revoked/destroyed`), not a permanent object. |
+| **Server-side enforcement** | Policies are gates evaluated at access time inside atomic database operations — never UI-only. |
+| **Honest limitations** | Out-of-scope risks are documented, not hand-waved (see §24 and the threat model). |
 
 ## 3. Core Workflow
 
 ```text
-Create → Encrypt → Configure Policy → Deliver → Authenticate → Access → Expire / Revoke / Destroy
+Create → Encrypt (browser) → Configure Policy → Deliver (URL + PIN out-of-band)
+      → Authenticate → Atomic Consumption → Expire / Revoke / Burn / Destroy → Purge
 ```
 
-## 4. Delivery Model
+## 4. Delivery Domain Model
 
-A **delivery** is the central domain object. Each delivery may contain:
+A **delivery** is the central aggregate:
 
-| Field Group | Contents |
+| Field group | Contents |
 |---|---|
-| Payload | Encrypted payload (`text` secret or `file` ciphertext) + cryptographic parameters; file deliveries additionally reference an encrypted Storage blob |
-| Authentication | PIN configuration |
-| Recipients | Per-recipient access configuration |
-| Policy | Max view count, expiration, release time, burn-after-reading |
-| State | Lifecycle status, creation/access timestamps |
+| Payload | `kind` = `text` (per-copy ciphertext lives on recipient rows; single-recipient rows also mirror it for legacy access) *or* `file` (blob reference: `storage_path`, `file_nonce`, `enc_version`, name/MIME/size metadata) |
+| Authentication | Per-recipient bcrypt PIN hash + `pin_scheme` (`raw` \| `sha256`) |
+| Recipients | 1–50 rows, each with its own URL token, wrapped key material, counters, status |
+| Policy | `max_views` (0 = unlimited), `burn_after_reading`, `expires_at`, `release_at`, `renewal_deadline` / `renewal_window_minutes` |
+| State | Lifecycle `status`, view/failed-attempt counters, timestamps |
 
-This lets security and lifecycle policies be defined independently per delivery.
+Identifiers (`delivery id`, `creator_token`, `url_token`) are 128-bit random values encoded as 22-char URL-safe strings — no sequential IDs, no user input.
 
-## 5. Client-Side Encryption
+## 5. Text Encryption Architecture
 
-Content is encrypted **before transmission**, using:
+Per copy, entirely client-side (`src/lib/crypto.ts`):
 
-- AES-256-GCM (authenticated encryption)
-- PBKDF2 key derivation with configurable iteration count
-- Per-delivery salt + unique GCM nonce
+```
+salt   = random(128 bits)            // unique per encrypted copy
+nonce  = random(96 bits)             // fresh per AES-GCM encryption
+key    = PBKDF2-SHA256(pin, salt, 600_000 iterations) → 256-bit AES-GCM key
+ct     = AES-256-GCM(key, nonce, plaintext, tagLength=128)
+```
 
-The database stores only ciphertext and cryptographic parameters — never plaintext. Security claims are validated against the implementation and deployment configuration, not assumed from the schema alone.
+Transport: the client sends `{ciphertext, nonce, salt, iterations}` plus the **PIN transport value** — `SHA-256(pin)` hex for new drops (`pin_scheme='sha256'`), the raw digits only from legacy clients (`pin_scheme='raw'`). Decryption re-derives the key locally from the **raw** PIN; wrong PINs fail GCM authentication closed. PBKDF2 parameters arrive from the client but are validated server-side (10,000–1,000,000 iterations accepted).
 
-File deliveries use **envelope encryption** on top of the same primitives: the browser generates a fresh random 256-bit content key that encrypts the file once (AES-256-GCM), then wraps that content key once per recipient with the same PBKDF2-derived-key construction used for text secrets. Each recipient unwraps their copy of the key locally after PIN validation. The raw content key never leaves the creator's browser, and the server handles ciphertext only — stored as opaque `application/octet-stream` objects in a private Storage bucket under randomized paths, so even object paths reveal nothing about the original filename.
+Randomness uses rejection sampling for unbiased digit generation and `crypto.getRandomValues` throughout.
 
-## 6. Recipient-Specific Access
+## 6. File Envelope Encryption
 
-Each recipient receives an independent access mechanism, so the creator controls access per recipient instead of relying on a single shared link. Recipient access can be revoked individually where supported by policy.
+Files add one layer so large payloads are encrypted once regardless of recipient count:
+
+1. Browser generates a random **256-bit DEK** (`generateFileKey`).
+2. File encrypted once: `AES-256-GCM(DEK, fresh nonce, bytes)` → uploaded ciphertext.
+3. DEK **wrapped per recipient**: identical construction to §5 (PBKDF2-SHA256 of that recipient's PIN → AES-GCM over the DEK). Each wrapped bundle `{encryptedData, nonce, salt, iterations}` is independent and stored in that recipient's existing row columns.
+4. Upload path: `POST /api/delivery/file` (multipart) with ciphertext + `meta` JSON. Server validates size ≤ 25 MiB (`413`), MIME allowlist (`415`), then uploads the blob to private Storage **before** inserting DB rows — any failure rolls both sides back.
+5. Access returns the ciphertext body with an `X-Vaultdrop-Meta` header (base64url JSON): `{kind, fileName, mime, size, iv, enc, wrapped:{e,n,s,it}, destroyed, burnAfterReading}`.
+6. Recipient unwraps the DEK locally with their raw PIN, decrypts bytes, and downloads under the original filename.
+
+Guarantees: the raw DEK and the plaintext file never reach the server; stored objects are always `application/octet-stream`; object paths are randomized (`deliveries/<deliveryId>/<random>.bin`, both components 128-bit random) so filenames never leak into storage layout; a file retrieval consumes a view through the same RPC as text.
+
+## 7. Recipient-Specific Access
+
+Each recipient owns an independent link (`/r/<url_token>`), PIN, encrypted copy, and status (`pending | opened | revoked | locked`). Compromising or revoking one recipient never affects another.
 
 ```text
 Delivery
-├── Recipient A → Access
-├── Recipient B → Access
-└── Recipient C → Revoked
+├── Recipient A → own ciphertext/wrapped key · own PIN · openable
+├── Recipient B → own ciphertext/wrapped key · own PIN · opened
+└── Recipient C → revoked (copy wiped)
 ```
 
-## 7. Authentication and Protection
+The creator dashboard reads per-recipient states plus the audit timeline; per-recipient revocation wipes that row's key material and conditionally deletes the shared blob once no consumable copies remain (`deliveryHasLiveCopies` check).
 
-Protected deliveries can require PIN-based authentication, with:
+## 8. Authentication
 
-- PIN verification (bcrypt hash stored — never plaintext)
-- Failed-attempt tracking and lockout behavior
-- Rate limiting
-- Recipient-specific access tokens + creator authorization tokens
+- **Verification:** bcrypt comparison of the transport value against `recipients.pin_hash` (legacy route: `deliveries.pin_hash`). Server never learns raw digits for `sha256`-scheme drops — it stores `bcrypt(sha256(pin))`.
+- **Rate limiting:** `check_pin_rate_limit` SQL function counts `pin_failed` events per (IP, drop) in a sliding 15-minute window (max 5); dual-mode since migration 007 (accepts url_token or delivery id). Returns `429` with `Retry-After`. A cheap in-memory limiter remains as a first gate on the legacy path.
+- **Lockout self-destruct:** the 5th failed attempt (counted atomically, §17) destroys that copy — key material nulled, status `locked`, events logged, file blob deleted if no live copies remain.
 
-## 8. Time-Locked Release
+## 9. Authorization
 
-A delivery can be configured with a future release time:
+- **Creator operations** (status, events, revoke, renew, delete): require `creator_token`, which is distinct from the delivery ID and never part of share links.
+- **Recipient access:** requires the secret `url_token` **and** the PIN.
+- **Database:** RLS enabled on all tables; no anon policies grant data access — all reads/writes flow through service-role API routes.
+- **Storage:** bucket has **no policies at all**; anon/authenticated roles are denied by default. Only service-role code touches objects.
 
-```text
-Locked → Release time reached → Authentication → Access
-```
+## 10. Time-Locked Release
 
-Time-lock is enforced in the server-side access flow, never by frontend state alone.
+`release_at` gates every read path. Before release, both access routes return `423` with `releaseAt`; recipient metadata reports `state: "not_released"`. Creation rejects past `release_at` and `expires_at ≤ release_at`. Enforcement is server-side at request time — frontend state plays no role.
 
-## 9. Lifecycle Controls
+## 11. Lifecycle Controls
 
-| Control | Effect |
+| Control | Mechanism |
 |---|---|
-| **Expiration** | Automatically unavailable after configured expiry time |
-| **Burn After Reading** | Unavailable after its permitted access |
-| **Revocation** | Creator recalls an active delivery |
-| **Recipient Revocation** | Individual recipient access revoked independently |
-| **Destruction** | Encrypted payload removed from the active record; encrypted file blobs deleted from Storage |
+| Expiration | Lazy transition at access time (wipe + `410`) **and** daily purge sweep |
+| Burn-after-read | Copy's ciphertext/nonce/salt/pin_hash nulled in the consumption transaction; delivery flips to `destroyed` when the last live copy goes |
+| Max views | Counted inside the locked transaction; allowance exhaustion burns the copy |
+| Revocation (drop) | All recipient copies wiped, blob deleted, status `revoked` |
+| Recipient revocation | One row wiped; conditional blob cleanup |
+| Dead man's switch | Deadline passed ⇒ destroy on next touch *and* via purge (§12) |
+| Lockout | After 5 atomic failed attempts (§8) |
+| Purge | Daily cron: expire stale actives, wipe their recipients, delete rows dead >30 days (+ blob sweep), prune events >30 days |
 
-## 10. Dead-Man's Switch
+Blob deletion follows one rule everywhere: the encrypted file object is removed when its delivery reaches a terminal state, immediately where whole-drop death occurs (revoke/delete/deadman/expiry) and after the last consumable copy disappears for per-recipient deaths (burn/lockout).
 
-A configurable mechanism allowing a delivery to respond to the *absence* of an expected creator action. This extends lifecycle control beyond fixed expiration times to condition-based self-destruction.
+## 12. Dead-Man's Switch
 
-## 11. Delivery State Model
+Creation optionally sets `renewal_deadline = now + renewal_window_minutes` (1–43,200). The creator pushes the deadline forward via `/renew`. If the deadline passes: any access attempt triggers `destroyForDeadManSwitch` (delivery wiped to `destroyed`, all recipient copies wiped, event logged, blob removed) even before the cron runs — a silent sender cannot leave a live drop behind.
 
-States: `active` · `accessed` · `expired` · `revoked` · `locked` · `destroyed`
+## 13. Delivery State Model
+
+States: `active` · `accessed` · `locked` · `expired` · `revoked` · `destroyed`
+Recipient states: `pending` · `opened` · `revoked` · `locked`
 
 ```text
               ┌──────────┐
               │  ACTIVE  │
               └────┬─────┘
-                   │
-        ┌──────────┼──────────┐
-        ↓          ↓          ↓
-     ACCESSED   REVOKED    EXPIRED
-        │          │          │
-        └──────────┼──────────┘
+     ┌─────────┬───┴────┬──────────┐
+     ↓         ↓        ↓          ↓
+  ACCESSED  LOCKED  EXPIRED    REVOKED
+ (burn→)     │        │          │
+     └────────┴────────┴──────────┘
                    ↓
                DESTROYED
 ```
 
-## 12. Audit and Lifecycle Events
+Public metadata endpoints translate this machine into user-facing states (`not_released`, `deadman`, etc.) without leaking internal fields.
 
-A dedicated event model records lifecycle activity without ever including plaintext content:
+## 14. Audit Events
 
-`created` · `pin_validated` · `pin_failed` · `accessed` · `expired` · `revoked` · `locked` · `destroyed`
+`access_events` records: `created` · `pin_validated` · `pin_failed` · `accessed` · `expired` · `revoked` · `locked` · `destroyed` — each with timestamp, optional `recipient_id`, and JSON metadata (IP value as supplied by the proxy-sanitized `clientIp()` helper, remaining attempts, failure reasons). Events power the creator timeline and the database-backed rate limiter; they provide **auditable access history**, not cryptographic non-repudiation. Entries older than 30 days are pruned by the purge sweep.
 
-## 13. Database Architecture
+## 15. PostgreSQL Architecture
 
-PostgreSQL via Supabase, primary tables:
+Supabase PostgreSQL, three primary tables (migrations 001–008):
 
 | Table | Stores | Notes |
 |---|---|---|
-| `deliveries` | ID, encrypted payload, crypto parameters, PIN scheme/hash, access policy, lifecycle status, metadata, timestamps | File deliveries add `kind`, file name/MIME/size, `storage_path`, `file_nonce`, and `enc_version`; indexed on commonly accessed fields |
-| `recipients` | Per-recipient encrypted copies: wrapped key material, URL token, PIN hash, view count, lockout state | One row per recipient; independent consumption and revocation |
-| `access_events` | Event ID, delivery reference, event type, timestamp, metadata | Indexed likewise |
+| `deliveries` | ID, title/content type, legacy mirrored ciphertext columns, `pin_hash`/`pin_scheme`, full policy set, lifecycle `status`, counters, timestamps; file deliveries add `kind, file_name, file_mime, file_size, storage_path, file_nonce, enc_version` | Indexed on expiry/status/creator_token/release_at/renewal_deadline/storage_path |
+| `recipients` | `url_token` (unique), `name`, `pin_hash`, per-copy key material, `status`, counters, `opened_at`/`revoked_at` | Indexed by delivery_id and url_token |
+| `access_events` | Event type, delivery/recipient refs, `event_time`, JSON metadata | Indexed by delivery, recipient, time |
 
-Encrypted file payloads live outside PostgreSQL in a **private** Supabase Storage bucket
-(`vaultdrop-files`) that stores only `application/octet-stream` ciphertext objects at
-randomized paths. The bucket is reachable exclusively through service-role credentials held
-by server-side routes — no public URLs, no anon-key policies.
+RLS is enabled on all three; no anon policies exist — everything flows through service-role routes.
 
-Row Level Security is enabled on protected tables.
+## 16. Supabase Storage Architecture
 
-## 14. Atomic Operations
+Private bucket **`vaultdrop-files`** (migration 008): `public=false`, `file_size_limit=26214400` (25 MiB), `allowed_mime_types=['application/octet-stream']`, **no `storage.objects` policies**. Consequences:
 
-Concurrent requests must not corrupt security-sensitive state transitions or view counts — e.g. with `max views = 1`, two simultaneous requests must never both consume the one-time allowance. Dedicated database operations handle these transitions atomically.
+- Anonymous access fails whether attempted via public URL, direct fetch, or the anon-key SDK client (verified by dedicated probes in the file-delivery suite).
+- Objects are pure ciphertext; the server streams them only after the same PIN/policy/view checks as text.
+- Paths (`deliveries/<deliveryId>/<random>.bin`) are randomly generated, never user-derived.
 
-## 15. Application Architecture
+## 17. Atomic Database Operations
 
-Next.js + TypeScript application:
+Three SQL functions carry the security-critical transitions:
+
+| Function | Guarantee |
+|---|---|
+| `consume_recipient_secret` (005) | Single consumption of a copy: `pg_try_advisory_xact_lock(hashtext(recipient_id))` + `SELECT … FOR UPDATE` on both rows; all policy checks re-evaluated **inside** the lock; burn wipes key material in the same transaction; concurrent losers receive structured errors mapped to HTTP 409/410/423 |
+| `record_failed_attempt` / `record_failed_attempt_delivery` (006) | Failed-PIN counting as a single self-referencing `UPDATE … RETURNING` — atomic under any contention; `SECURITY DEFINER`, execute revoked from public/anon/authenticated, granted to `service_role` only |
+| `check_pin_rate_limit` (005, dual-mode 007) | Sliding-window throttle computed from `access_events` in SQL — survives restarts, holds across instances |
+
+Both access routes fall back to optimistic CAS (`UPDATE … WHERE view_count = <snapshot>` / `failed_attempts = prev`) if the RPCs were ever missing, preserving correctness though with different contention behavior.
+
+## 18. Race-Condition Handling
+
+| Race | Defense | Verified by |
+|---|---|---|
+| Two valid opens of a one-time secret | Advisory lock serializes; second consumer sees nulled ciphertext → `already_consumed` (410) | Hardening suite: 20-way simultaneous open → exactly one 200 |
+| Parallel wrong PINs losing increments | Single-statement atomic increments | Hardening suite: 12 parallel wrong PINs → counter 13, lockout fires |
+| Revocation vs. in-flight access | Status re-checked inside the consumption lock (`delivery_invalid`, `locked`) | Hardening suite: revoked-recipient denial with correct PIN |
+| Expiry vs. in-flight access | Expiry gate runs before any PIN work in both routes | Hardening suite: expired-drop denial |
+| Legacy-path double-read | Optimistic CAS on `view_count` snapshot | Legacy/hardening suites |
+
+## 19. Application Architecture
+
+Next.js 15 App Router + TypeScript:
 
 ```text
-Application Layer
-├── Pages / UI
-├── React Components
-├── API Routes
-└── Security / Utility Modules
-
-Backend Flow
-Client → Next.js API Route → Validation / Authorization → Supabase → PostgreSQL
+src/
+├── app/
+│   ├── page.tsx                 creator UI (text + file modes)
+│   ├── r/[token]/page.tsx       recipient unlock/decrypt UI
+│   ├── dashboard/[id]/page.tsx  creator dispatch board (status, renew, revoke…)
+│   └── api/
+│       ├── delivery/route.ts             create text (≤50 recipients)
+│       ├── delivery/file/route.ts        create file (multipart)
+│       ├── delivery/[id]/…               meta · access · status · events · revoke · renew · delete
+│       ├── recipients/[token]/…          meta · access · revoke
+│       └── purge/route.ts                authenticated cleanup sweep
+└── lib/
+    ├── crypto.ts        Web Crypto wrappers (text + envelope schemes)
+    ├── storage.ts       bucket constants, upload/download/remove, live-copy logic
+    ├── deadman.ts       trigger check + destruction helpers
+    ├── bcrypt.ts        hashing/verification
+    ├── ratelimit.ts     in-memory first-gate limiter + IP extraction
+    └── supabase/server  service-role client factory
 ```
 
-API routes handle delivery creation, access, recipient management, lifecycle operations, and event retrieval.
+Routes validate input, enforce rate limits and policy gates, call the atomic RPCs, and shape responses; business-critical state transitions never happen in React.
 
-## 16. Security Components
+## 20. Security Modules
 
-Dedicated modules isolate security-sensitive logic from presentation-layer components (reducing coupling, easing audit/test):
+Cryptographic operations · PIN transport hashing · bcrypt verification · storage abstraction (private-bucket-only) · dead-man's-switch logic · rate limiting (in-memory + SQL-backed) · atomic-consumption RPCs. Isolating these from UI components keeps them auditable and directly exercised by the test suites.
 
-Cryptographic operations · Password/PIN hashing · Rate limiting · Dead-man's-switch logic · Supabase server access · Delivery lifecycle operations
+## 21. Testing and Reliability
 
-## 17. Testing and Reliability
+Seven suites, **126/126 scenarios passing**, executed against a live Supabase backend:
 
-Targeted test scripts cover:
+Legacy 4 · Multi-recipient 24 · Time-lock 9 · Lockout 5 · Dead-man's-switch 10 · Security hardening 31 · File delivery 43.
 
-Legacy behavior · Multi-recipient access · Time-locked release · Lockout self-destruct · Dead-man's-switch behavior · Security hardening (concurrency races, lockout, plaintext-leak scans) · Encrypted file delivery (round trips, size/type limits, lifecycle blob deletion, private-bucket denial)
+Coverage includes concurrency races (exactly-one-winner assertions), parallel failed-PIN counting, lockout destruction, per-recipient revocation isolation, expired/time-locked denial, byte-exact file round-trips, size/MIME enforcement, lifecycle blob deletion across burn/expiry/revoke/lockout, private-bucket anonymous-access probes, and plaintext-leak scans over every API response. Type-check passes; lint reports 0 errors (1 pre-existing config warning). Security properties are validated at the application/database boundary, not assumed from schema.
 
-Current status: **125 of 126 automated scenarios pass**; the sole failure is a stale test
-expectation documented in the threat model (§8).
-
-Security testing validates that policies are enforced at the **application and database boundaries**, not solely via frontend restrictions.
-
-## 18. Technology Stack
+## 22. Technology Stack
 
 | Layer | Technologies |
 |---|---|
-| Application | Next.js, React, TypeScript, Tailwind CSS |
-| Backend | Next.js API Routes, Supabase (PostgreSQL + Storage), Vercel |
-| Security | AES-256-GCM, PBKDF2, bcrypt, Envelope Encryption (files), Row Level Security, Rate Limiting |
-| Deployment | Vercel, Supabase |
+| Application | Next.js 15 (App Router), React, TypeScript, Tailwind CSS |
+| Backend | Next.js Route Handlers, Supabase (PostgreSQL + Storage), Vercel |
+| Crypto | Web Crypto API: AES-256-GCM, PBKDF2-SHA256 (600k), SHA-256 transport hashing; bcryptjs server-side |
+| Data | PostgreSQL with RLS, advisory-lock RPCs, JSONB audit events |
+| Storage | Private Supabase Storage bucket, octet-stream ciphertext objects |
+| Deployment | Vercel (daily cron `0 3 * * *` for `/api/purge`) + Supabase |
 
-## 19. Engineering Objectives
+## 23. Engineering Objectives
 
-VaultDrop demonstrates:
+- Secure client-side handling of both string secrets and binary files
+- Explicit, server-enforced access policy per delivery and per recipient
+- Time- and condition-based availability (time-lock, dead man's switch)
+- Deterministic destruction wired into every lifecycle exit, including storage blobs
+- Race-proof security transitions at the database boundary
+- Auditable delivery state transitions without exposing content
 
-- Secure client-side data handling
-- Explicit access-policy enforcement and recipient-specific authorization
-- Time- and condition-based availability
-- Controlled secret lifecycle management
-- Atomic handling of security-sensitive operations
-- Auditable delivery state transitions
+## 24. Security Assumptions and Limitations
 
-The architecture is intentionally centered around the **delivery lifecycle** — not paste-and-delete.
+**Assumed trusted:** browser crypto (Web Crypto), CSP-free-but-static bundle delivery, Supabase/Vercel infrastructure boundaries, creators' and recipients' devices at rest.
+
+**Explicitly out of scope / residual risks:**
+
+- **Malicious served JavaScript** — anyone able to modify the served bundle defeats any browser-crypto design (shared with PrivateBin et al.). Mitigated operationally (static shipping, audit logs), documented as out of scope.
+- **Compromised endpoints** — a compromised creator/recipient device sees decrypted content by definition.
+- **Recipient discretion** — anyone who legitimately decrypts content can copy, screenshot, or save it; downloaded files cannot be remotely destroyed.
+- **Metadata visibility** — titles, filenames/sizes/MIME types, policies, hashed IPs, and timelines are visible to the server operator.
+- **Weak-PIN offline risk** — 6-digit PINs resist online attack (throttle + lockout destruction), but an attacker holding a full database dump plus surviving ciphertext could brute-force offline; default burn-after-read and expiry exist to shrink that window.
+- **Per-instance creation limiting** — the 10/hour creation cap is in-memory (per instance); PIN-attempt throttling is database-backed and not affected.

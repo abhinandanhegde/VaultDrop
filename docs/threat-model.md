@@ -1,202 +1,167 @@
 # VaultDrop — Threat Model & Security Analysis
 
-## 1. The Problem, Restated
+> Scope: the VaultDrop delivery system as implemented (migrations 001–008, `src/lib/*`, API routes, private Storage bucket). Every claim below is tied to code or to one of the seven automated suites (**126/126 scenarios passing**). Companion docs: [`../README.md`](../README.md), [`technical-overview.md`](technical-overview.md).
 
-PrivateBin solves one problem: *a server can host encrypted pastebin content it cannot read.*
-The threat model stops there. VaultDrop starts from that same primitive and extends the
-threat model to cover the *delivery workflow* — because in practice, secrets fail not because
-the cipher is weak, but because **delivery is uncontrolled**.
+## 1. Model and Assets
 
-> **PrivateBin solves X (encrypted paste). We identified Y (uncontrolled delivery) and
-> Z (no accountability), and our architecture addresses both.**
+VaultDrop extends the encrypted-paste primitive (PrivateBin) from *static content* to a **controlled delivery lifecycle**: per-recipient verification, view limiting, scheduled release, sender-liveness, and deterministic destruction.
 
-| Threat | PrivateBin | VaultDrop |
-|---|---|---|
-| Anyone with the URL reads the secret | Yes (key in fragment) | No — requires URL **+** 6-digit PIN |
-| A shared link can be recalled | No | Yes — per-recipient revocation |
-| Creator knows who opened / who didn't | No | Yes — per-recipient status + event timeline |
-| One person's compromise affects everyone | N/A (single recipient) | No — each recipient has an independent encrypted copy |
-| Access can be scheduled, not just destroyed | No | Yes — time-lock release (server-enforced) |
-| A secret survives a silent sender | N/A (single recipient) | No — dead man's switch self-destructs it |
+Assets protected:
 
-## 2. Assets We Protect
+1. **Plaintext content** (text secrets; file bytes) — exists only in creators'/recipients' browsers.
+2. **Key material** — text keys are derived in-browser via PBKDF2-SHA256 from raw PINs; file DEKs are random 256-bit values wrapped per recipient under the same construction. Neither is transmitted or stored in recoverable form.
+3. **Access accountability** — who opened what is visible only to the creator, gated by a `creator_token` distinct from any shareable identifier.
 
-1. **The secret plaintext** (text or file contents) — only ever exists in the creator's and
-   recipients' browsers. For files, this includes the decrypted bytes on either end; the
-   server only ever handles AES-256-GCM ciphertext.
-2. **The decryption key** — derived client-side from the recipient's PIN via PBKDF2-SHA256.
-   Files add a random 256-bit content key wrapped per recipient with that same derivation;
-   the raw content key is never transmitted or stored. Never transmitted. Never stored.
-3. **Recipient identity** — the mapping of "who opened what" is visible only to the creator
-   (protected by a creator token that is not the delivery ID).
+## 2. What the Server Can and Cannot See
 
-## 3. What the Server Can and Cannot See
-
-| Server can see | Server cannot see |
+| Server sees | Server does not get |
 |---|---|
-| Delivery ID (the URL path) | Decryption key |
-| bcrypt hash of each PIN | Raw PIN (new drops: clients transmit only `SHA-256(pin)`; the server stores `bcrypt(sha256(pin))`, so it can never combine a known PIN with the stored salt/iterations to derive the key itself) |
-| AES-256-GCM ciphertext (per recipient) | Plaintext |
-| Access events, timestamps, IP hashes | Content of the secret |
-| Policy (expiry, burn-after-read, release time) | PBKDF2 salt alone is useless without the PIN |
+| Delivery IDs, recipient `url_token`s, creator tokens | Decryption keys (derived client-side from raw PINs) |
+| `bcrypt(sha256(pin))` hashes + PBKDF2 salts / iteration counts | Raw PINs on new drops (`SHA-256(pin)` is the transport value) |
+| Ciphertext: per-recipient text blobs, wrapped DEKs, Storage file blobs | Plaintext secrets or file contents |
+| File metadata: name, MIME type, size | Anything decryptable from stored bytes alone |
+| Policy configuration, lifecycle state, counters | |
+| Access events: type, timestamp, IP value, failure reasons | |
 
-**Zero-knowledge property:** the server stores *only* ciphertext + hashes. Given the database
-in full, an attacker recovers ciphertext but no plaintext, no PIN, and no key.
+**The server cannot access plaintext content or the decryption keys under the documented client-side encryption model.** It does see metadata, ciphertext, and hashes — VaultDrop's claim is precisely scoped, not "the server knows nothing."
 
-**PIN transport hashing (migration 007):** drops carry a `pin_scheme` column (`raw` for
-pre-existing drops, `sha256` for new ones). Clients read the scheme from the metadata
-endpoint and send the matching transport value; access endpoints accept either form and
-treat both as opaque bcrypt inputs, so wrong-scheme values fail exactly like a wrong PIN
-(no oracle). Pre-existing `raw` drops keep working unchanged but retain the older,
-weaker guarantee — they should be left to expire.
+Cryptographic parameters as implemented: AES-256-GCM (128-bit auth tags); PBKDF2-HMAC-SHA256 with 600,000 iterations, a unique 128-bit salt and a fresh 96-bit nonce per encryption; bcrypt PIN-hash verification; SHA-256 PIN transport hashing (`pin_scheme='sha256'`); atomic PostgreSQL operations (transaction-level advisory locks, `FOR UPDATE` row locks, single-statement counter updates); database-backed sliding-window rate limiting; envelope encryption for files; a private Storage bucket with no access policies.
 
-**Encrypted file delivery (migration 008):** files use envelope encryption on top of the
-same primitives. The browser generates a random 256-bit content key (DEK), encrypts the
-file once with AES-256-GCM and a fresh IV, wraps the DEK for each recipient with the
-identical PBKDF2 construction used for text, and uploads only ciphertext — stored as
-opaque `application/octet-stream` objects in the **private** `vaultdrop-files` Storage
-bucket under randomized paths (`deliveries/<id>/<random>.bin`; original filenames never
-appear in paths). The server streams ciphertext to authorized recipients after the same
-PIN/policy/view-count checks as text; the wrapped DEK rides in a response header so the
-browser decrypts locally. Plaintext files and raw DEKs never reach the server. The blob
-is deleted with the rest of the drop's lifecycle: burn-after-read (once every
-consumable copy is gone), expiry, revocation, PIN lockout, dead-man's switch, creator
-delete, and the purge cron sweeps stragglers. A file retrieval consumes a view exactly
-like a text open.
+## 3. Threat Analysis
 
-## 4. Attack Scenarios
+Format: **Threat → Attack scenario → Mitigation → Evidence → Residual risk.**
 
-### 4.1 Database is fully compromised
-- **Impact:** ciphertext + bcrypt PIN hashes + event logs leak.
-- **Why you're still safe:** PIN hashes are bcrypt (computationally expensive to brute-force
-  even for 6-digit PINs); the secret is AES-256-GCM with a 600K-iteration PBKDF2 key. No
-  plaintext is recoverable.
-- **Residual risk:** a weak PIN is brute-forceable offline. Mitigation: rate-limited online
-  attempts (5 max), then the encrypted copy is **destroyed server-side** (lockout
-  self-destruct) — no ciphertext remains to brute-force offline.
+### 3.1 Database compromise
+- **Scenario:** attacker obtains a full dump of `deliveries`, `recipients`, `access_events`, plus all Storage objects.
+- **Mitigation:** only ciphertext, wrapped keys, bcrypt hashes, and metadata exist there. Text/file keys require raw PINs (600k-iteration PBKDF2 per guess). New drops never expose raw PINs to the server at all. Lockout destruction and burn-after-read minimize how long ciphertext survives to be attacked offline.
+- **Evidence:** hardening + file suites scan every API response for plaintext leakage; round-trip tests confirm stored bytes are GCM ciphertext only; wrong-PIN unwrap attempts fail closed.
+- **Residual risk:** a 6-digit PIN space (10⁶ candidates) is brute-forceable offline given retained ciphertext (~6×10¹¹ SHA-256 ops per copy on typical hardware). Default burn-after-read, expiry, and lockout destruction exist to shrink that window; unconsumed long-lived drops remain the weakest-link case.
 
-### 4.2 A recipient's URL leaks
-- **Impact:** the link is useless without the PIN.
-- **Why you're still safe:** the URL and PIN travel separate channels by design (documented in
-  the UI: "send through different channels").
+### 3.2 URL / token leakage
+- **Scenario:** a share link is intercepted, forwarded, or scraped.
+- **Mitigation:** links carry no key material (keys derive from PINs, not URLs — unlike fragment-key schemes); access additionally requires the PIN; creators can revoke instantly; tokens are 128-bit random values, not enumerable IDs.
+- **Evidence:** multi-recipient suite verifies wrong-PIN denial independent of a valid token; revocation tests confirm immediate refusal.
+- **Residual risk:** if URL *and* PIN travel the same insecure channel, both can leak together — out-of-band distribution is a procedural control the UI reinforces but cannot enforce.
 
-### 4.3 A recipient is compromised / leaves the team
-- **Impact:** their copy can be revealed, but only theirs.
-- **Why you're still safe:** per-recipient revocation destroys their encrypted copy server-side
-  without touching other recipients. Revoking an entire delivery also cascade-wipes every
-  recipient's ciphertext copy, so no encrypted remnants outlive a revoked drop.
+### 3.3 PIN leakage
+- **Scenario:** PIN guessed from context (birthdays), reused elsewhere, or sent over the same channel as the URL.
+- **Mitigation:** unbiased rejection-sampled digit generation; UI instructs separate-channel distribution; transport hashing means a server-side observer of requests sees `sha256(pin)` — replayable as an authentication value, but useless for deriving the PBKDF2 key, which requires the raw digits.
+- **Evidence:** migration 007 + `pin_scheme` enforcement in create/access routes; crypto unit tests cover `hashPinForTransport`.
+- **Residual risk:** a disclosed raw PIN defeats protection for that recipient until burn/revocation; VaultDrop cannot detect disclosure.
 
-### 4.4 The server admin is malicious (serves modified JS)
-- **Impact:** an attacker who can modify the served page can steal what the browser decrypts.
-- **Honest limitation:** this is shared with *all* client-side crypto (PrivateBin has the same
-  caveat). VaultDrop mitigates by shipping the crypto bundle statically and logging events,
-  but we explicitly document this as out-of-scope, exactly as PrivateBin does.
+### 3.4 Online PIN brute force
+- **Scenario:** attacker iterates PIN guesses against a recipient link.
+- **Mitigation:** database-backed sliding window (5 failed attempts per IP per drop in 15 minutes → `429` + `Retry-After`, computed by the `check_pin_rate_limit` SQL function over audit events); independently, the 5th counted failure destroys that copy server-side — nothing remains to attack.
+- **Evidence:** lockout suite 5/5 (countdown, destruction); hardening suite validates DB-backed throttling semantics across "restarts."
+- **Residual risk:** distributed sources reach the cap faster than one source can — but the total of 5 failures still destroys the copy regardless of source count.
 
-### 4.5 Timing / side channels & race conditions
-- **Token comparisons** (`creator_token`) use exact string match.
-- PIN verification is bcrypt (constant-time per call); failed attempts are rate-limited and
-  counted per recipient.
-- **Concurrent-open race:** two requests with a valid PIN at the same instant cannot both
-  read the secret. Consumption runs inside `consume_recipient_secret`, a PostgreSQL function
-  that takes a transaction-level advisory lock (`pg_try_advisory_xact_lock`) plus
-  `SELECT ... FOR UPDATE` row locks, checks all policy state *inside* the lock, and wipes
-  ciphertext atomically with the read. Losers receive HTTP 409 (transient contention, retry)
-  or HTTP 410 (allowance spent).
-- **Legacy single-recipient path:** consumption is guarded by an optimistic-concurrency
-  claim (`UPDATE ... WHERE view_count = <snapshot>`). Only the request whose claim lands
-  serves ciphertext; burn-after-read and the ciphertext wipe happen in that same statement,
-  so no window exists between "counted" and "destroyed". Race losers receive HTTP 410 and
-  never see payload bytes. Verified under load: 10 concurrent valid-PIN opens → exactly
-  one 200; the other nine receive 410/429 with zero ciphertext exposure.
-- **Atomic failed-attempt counting:** wrong-PIN increments run through
-  `record_failed_attempt` / `record_failed_attempt_delivery` (migration `006`), which are
-  single-statement self-referencing UPDATEs — atomic in PostgreSQL regardless of
-  contention. An attacker spraying parallel wrong PINs cannot lose increments and squeeze
-  extra guesses past the 5-attempt lockout. Verified: 12 concurrent wrong PINs → counter
-  reads 13 (all attempts counted, none lost), drop locked and ciphertext wiped.
-  Both access routes fall back to optimistic CAS if the RPC is not deployed.
-- **Distributed rate limiting:** the failed-PIN window is evaluated by the
-  `check_pin_rate_limit` SQL function against `access_events`, so limits hold across server
-  restarts and multiple instances (an in-memory limiter remains as a cheap first gate on the
-  legacy path). Migration 007 made the same RPC dual-mode: it accepts either a recipient
-  `url_token` or a legacy delivery id, so both access routes share identical throttling.
-- **PBKDF2 parameters:** 600,000 iterations of PBKDF2-HMAC-SHA256 with a unique 128-bit
-  salt per drop and 96-bit nonces. This matches OWASP's current recommendation for
-  PBKDF2-SHA256 (600k) and is defensible for a browser-only implementation; Web Crypto
-  offers no memory-hard KDF (Argon2id), which would be the alternative if the constraint
-  were ever lifted.
+### 3.5 Parallel failed-PIN attempts (lost increments)
+- **Scenario:** spraying concurrent wrong PINs hoping read-modify-write races lose increments, squeezing extra guesses past the limit.
+- **Mitigation:** counting uses a single self-referencing atomic `UPDATE … RETURNING` (migration 006; `SECURITY DEFINER`; execute revoked from public/anon/authenticated, granted to service_role only); an optimistic-CAS fallback preserves correctness if the RPC were absent.
+- **Evidence:** hardening suite: 12 simultaneous wrong PINs → counter reads 13 (every attempt counted, none lost), drop locked and wiped, zero 5xx.
+- **Residual risk:** none identified beyond §3.4.
 
-### 4.6 The sender goes silent / is compromised
-- **Impact:** a drop left alive indefinitely is one compromise away from leaking.
-- **Why you're still safe:** with a dead man's switch, an un-renewed drop self-destructs —
-  ciphertext and PIN hashes are wiped server-side the moment the deadline passes. A silent
-  sender cannot leave a live secret behind.
+### 3.6 Concurrent valid opens of a one-time secret
+- **Scenario:** multiple parties submit the correct PIN simultaneously, each expecting to extract the "one-time" secret.
+- **Mitigation:** consumption runs inside `consume_recipient_secret`: a transaction-level advisory lock (`pg_try_advisory_xact_lock`) plus `SELECT … FOR UPDATE` row locks on recipient and delivery; all policy state is re-checked inside the lock; burn wipes key material in the same transaction that serves bytes. Losers receive structured errors mapped to HTTP 409/410. The legacy route uses optimistic CAS on the `view_count` snapshot — only the winning statement serves ciphertext.
+- **Evidence:** hardening suite: 20-way simultaneous valid-PIN open → exactly one `200`, losers get 409/410/429, replay → 410; file suite: 6-way race → exactly one winner.
+- **Residual risk:** none within the model.
 
-## 5. Security Properties (claims we make)
+### 3.7 View-count races (multi-view deliveries)
+- **Scenario:** racing requests attempt to exceed `max_views`.
+- **Mitigation:** each consumption increments counts exactly once inside the locked path; allowance exhaustion triggers the burn branch atomically.
+- **Evidence:** multi-recipient and hardening suites exercise max-view enforcement under concurrency.
+- **Residual risk:** none identified.
 
-1. **Confidentiality in transit & at rest** — AES-256-GCM, key never leaves the browser.
-2. **Authentication** — PIN proof via bcrypt on the server; derived key on the client.
-3. **Authorization** — creator token gates management; per-recipient token gates each copy.
-4. **Integrity** — AES-GCM provides authenticated encryption (tampering is detected).
-5. **Non-repudiation of access** — every access attempt (success/fail) is logged with a timestamp.
-6. **Freshness / revocability** — revocation, expiration, and burn-after-read enforce lifecycle.
-7. **Temporal control** — time-lock release is enforced server-side (not merely cosmetic).
-8. **Proof of liveness** — a dead man's switch self-destructs the drop if the creator stops
-   renewing before the deadline, so a silent sender can never leave a live secret behind.
+### 3.8 Revocation races (revoke vs. in-flight access)
+- **Scenario:** an access request passes pre-checks while a revoke lands, then still serves ciphertext.
+- **Mitigation:** status is re-evaluated **inside** the consumption lock (`delivery_invalid` / `locked` error paths); revoke routes wipe copies immediately and delete file blobs (unconditionally for whole-drop revoke, conditionally once no live copies remain for single-recipient revoke); revoked recipients are refused even with the correct PIN.
+- **Evidence:** hardening suite: revoked-recipient denial with correct PIN; revoke tests confirm key-material wipes.
+- **Residual risk:** a response already in flight at the moment of revocation may deliver that one copy — inherent to distributed systems; every subsequent attempt fails.
 
-## 6. What We Explicitly Do NOT Protect Against
+### 3.9 Expiration races (expiry vs. access)
+- **Scenario:** a request arrives at the expiry boundary hoping to ride a stale allow decision.
+- **Mitigation:** the expiry gate runs **before any PIN work** in both access routes, performs the lazy `expired` transition, wipes key material, deletes file blobs, and returns `410`; the daily purge sweep catches untouched stragglers.
+- **Evidence:** hardening suite: expired-drop denial; deadman suite covers deadline-driven transitions.
+- **Residual risk:** inter-instance clock skew could extend life by the skew duration; Supabase/Vercel run NTP-synced clocks.
 
-- Malicious/injected client-side code (shared with all browser-crypto solutions).
-- The creator's own device being compromised.
-- Recipients colluding (a recipient who legitimately has the PIN can read it).
-- Physical coercion / rubber-hose attacks.
-- **Files already saved by a recipient.** Revocation, expiry, and burn-after-read delete
-  everything on the server — including encrypted file blobs — but cannot reach a file a
-  recipient has already downloaded to their device. This is true of every delivery system;
-  for VaultDrop it means file drops should go only to recipients you trust with their own copy.
+### 3.10 Recipient compromise
+- **Scenario:** one recipient turns malicious or their device is seized.
+- **Mitigation:** per-recipient independent copies bound exposure to that recipient; creator revokes that single link without touching others; each copy has its own PIN and ciphertext.
+- **Evidence:** multi-recipient suite: isolation and individual-revocation scenarios.
+- **Residual risk:** whatever that recipient legitimately decrypted — or already downloaded — is beyond recall (§4).
 
-## 7. Why Client-Side Encryption (ADR)
+### 3.11 Creator compromise
+- **Scenario:** attacker seizes the creator's device or the `creator_token` to hijack or surveil deliveries.
+- **Mitigation:** the creator token gates management endpoints only (status, events, revoke, renew, delete); it grants no decryption ability — plaintext still requires each recipient's PIN.
+- **Evidence:** authorization checks on every management route; events route scopes timeline visibility to the token.
+- **Residual risk:** whoever controls the creator's device can recall/delete deliveries and read anything displayed there; the creator endpoint is inside the trust boundary by definition.
 
-We encrypt in the browser rather than on the server because the server is assumed to be a
-*semi-trusted* party: it may be legally compelled, breached, or misconfigured. By keeping the
-key derivation and decryption entirely client-side, the server's compromise does not yield
-plaintext. This matches the zero-knowledge model but extends it with delivery control that
-PrivateBin lacks.
+### 3.12 Malicious server-served JavaScript
+- **Scenario:** infrastructure or build pipeline compromise serves altered client bundles that exfiltrate PINs or decrypted content.
+- **Mitigation:** static bundle shipping, no runtime code injection, audit logging for forensics.
+- **Evidence:** architectural property; not testable from inside the system.
+- **Residual risk:** such an attack is fully effective against any browser-crypto design — PrivateBin documents the identical caveat; VaultDrop lists it as out of scope rather than denying it.
 
-## 8. Test Evidence
+### 3.13 Direct Storage access
+- **Scenario:** attacker attempts public object URLs, unauthenticated fetches, or the anon-key SDK client against `vaultdrop-files`.
+- **Mitigation:** bucket is `public=false` with **no `storage.objects` policies** — anon/authenticated roles are denied by default; only service-role API routes touch objects; object names are random and never exposed except after authorization.
+- **Evidence:** file-delivery suite probes all three vectors and asserts denial; migration 008 encodes the bucket configuration.
+- **Residual risk:** possession of the service-role key (i.e., server compromise) bypasses storage controls entirely — that is the declared trust boundary of §1.
 
-- **82 of 83 automated API/e2e scenarios passing** across six suites (legacy, multi-recipient,
-  time-lock, lockout self-destruct, dead man's switch, security-hardening). The single
-  failing assertion is a stale test expectation in the time-lock suite (it predates
-  single-recipient burn semantics); the production behavior it flags is correct.
-- **Security-hardening suite** (`scripts/test-security-hardening.ts`, 31 scenarios) covers:
-  repeated wrong-PIN lockout with countdown and destruction; 12 parallel wrong PINs
-  (atomic counting — all counted, no 5xx); revoked-recipient denial (even with the correct
-  PIN); expired-drop denial; 8-way simultaneous open of a one-time secret (exactly one
-  winner, losers get 409/410/429, replay → 410); max-view enforcement; and plaintext-leak
-  scans of every API response.
-- **File-delivery suite** (`scripts/test-file-delivery.ts`, 43 scenarios, Aug 2026) covers:
-  client-side round trips (random bytes, PDF, PNG — byte-exact after decrypt); wrong-PIN
-  content-key unwrapping rejected; oversized uploads rejected (HTTP 413) before any storage
-  write; disallowed MIME types rejected (HTTP 415); authorized retrieval streams ciphertext
-  that decrypts byte-for-byte; stored Storage objects contain only ciphertext (a
-  plaintext-marker scan finds no original bytes); the encrypted blob is deleted exactly when
-  the last consumable copy goes — verified for burn-after-read, expiry, revoke-all-recipients,
-  and PIN lockout; a 6-way simultaneous-open race produces exactly one winner; private-bucket
-  probes confirm anonymous access fails via public URL, direct fetch, and the anon-key client;
-  and the text flow still passes end-to-end afterwards.
-- Client crypto verified by round-trip tests (encrypt → decrypt reproduces plaintext).
-- All cryptographic randomness from the Web Crypto API (`crypto.getRandomValues` / `crypto.subtle`).
-- **Atomic consumption verified end-to-end** (Aug 2026) against the live Supabase project:
-  valid PIN → 200 + ciphertext returned + copy burned in the same transaction;
-  immediate replay → 410 Gone; unknown token → structured 404; expired drop → 410 with
-  lazy expiry applied.   Migrations `005_atomic_operations.sql` (advisory-lock consumption +
-  DB-side rate limiting), `006_atomic_failed_attempts.sql` (atomic failed-attempt counters),
-  `007_pin_transport_hashing.sql` (PIN transport hashing), and `008_file_delivery.sql`
-  (file-delivery schema + private Storage bucket) are applied to production.
-- **Concurrency probes under load** (Aug 2026):
-  - Recipient path: 20 simultaneous valid-PIN opens → exactly one 200 with ciphertext;
-    losers receive 409/410 (never an empty success).
-  - Legacy path: 10 simultaneous valid-PIN opens → exactly one 200; losers receive 410/429.
-  - Lockout race: 12 simultaneous wrong PINs → every increment counted (counter = 13 with
-    warm-up), status `locked`, ciphertext wiped.
+### 3.14 Ciphertext tampering
+- **Scenario:** attacker modifies stored blobs, ciphertext, salts/nonce fields, or wrapped keys seeking parser exploits or confusion.
+- **Mitigation:** AES-256-GCM authenticated encryption at both layers (text payloads; wrapped DEKs; file bytes) — any modification fails tag verification and decryption throws closed; `enc_version` guards future format evolution.
+- **Evidence:** byte-exact round-trip tests; wrong-key/wrong-PIN unwrap rejection tests.
+- **Residual risk:** denial-of-service only — a tampered drop becomes undecryptable.
+
+### 3.15 Dead-man's-switch failure (silent sender)
+- **Scenario:** creator disappears expecting the secret to die; or an attacker bets the deadline is cosmetic.
+- **Mitigation:** the deadline is enforced at access time — the next touch destroys the delivery row, all recipient copies, and the file blob — *and* by the daily purge sweep even if nobody ever touches it. Renewal requires an explicit creator action.
+- **Evidence:** dead-man's-switch suite 10/10 (renewal extension, deadline expiry, destruction).
+- **Residual risk:** between deadline and first touch/purge the row exists but is unreadable (access path destroys it before serving anything).
+
+### 3.16 File lifecycle deletion
+- **Scenario:** encrypted file blobs linger after their drop should be gone (burned, expired, revoked, locked out, deleted, or swept).
+- **Mitigation:** deletion is wired into every lifecycle exit: burn-after-read removes the blob once no consumable recipient copy remains (`deliveryHasLiveCopies` check); whole-drop revocation, creator deletion, dead-man's-switch destruction, and lazy expiry remove it unconditionally; the daily purge additionally expires stale actives (deleting blobs), wipes recipients of expired drops, deletes rows dead >30 days with a blob sweep, and prunes old events. Missing objects mid-access yield `410` plus a `destroyed` audit event rather than errors.
+- **Evidence:** file-delivery suite asserts blob absence after burn-after-read, expiry, revoke-all-recipients, and PIN lockout, including the "last live copy" conditional logic.
+- **Residual risk:** object deletion via the Storage API is best-effort per call; the purge sweep provides the backstop, so worst case is delayed deletion, never extended availability through the app (access checks gate independently).
+
+### 3.17 Downloaded file persistence
+- **Scenario:** a recipient saves the decrypted file locally; the creator later revokes everything.
+- **Mitigation:** nothing — this is explicitly outside the model. Server-side destruction is total, but bytes already saved to a remote device cannot be recalled by any delivery system.
+- **Evidence:** documented limitation in README §Limitations and technical-overview §24.
+- **Residual risk:** accepted. Guidance: send files only to recipients you trust with their own copy; prefer burn-after-read to minimize re-obtaining windows.
+
+## 4. Explicit Non-Goals
+
+- Recalling content already rendered or saved on a recipient's device.
+- Defending against compromised browsers/devices of any participant.
+- Defending against malicious served client code (§3.12).
+- Protection from lawful compulsion of metadata (the operator holds it).
+- Cryptographic non-repudiation: audit logs are **auditable access events** supporting operational review — they are not tamper-proof evidence and make no legal claims.
+
+## 5. Testing Evidence
+
+**126/126 automated scenarios pass** across seven suites, executed against the live Supabase project:
+
+| Suite | Result | Security-relevant coverage |
+|---|---|---|
+| Legacy | 4/4 | Single-recipient compatibility incl. optimistic-CAS consumption |
+| Multi-recipient | 24/24 | Independent copies, per-recipient revocation/isolation |
+| Time-lock | 9/9 | 423 before release, release-at behavior, validation rules |
+| Lockout | 5/5 | Failure countdown, destruction at 5 |
+| Dead man's switch | 10/10 | Renewal, deadline expiry, self-destruction |
+| Security hardening | 31/31 | 20-way open race (one winner), 12-way wrong-PIN race (all counted), revoked/expired denial, max-view enforcement, plaintext-leak scans of every response |
+| File delivery | 43/43 | Byte-exact round-trips (PDF/PNG/random), wrong-PIN unwrap rejection, 413/415 limits, blob deletion across burn/expiry/revoke/lockout, 6-way race, private-bucket anonymous-access probes, text regression |
+
+Type-check passes; ESLint reports 0 errors (1 pre-existing config warning). All randomness derives from Web Crypto (`crypto.getRandomValues` / `crypto.subtle`). Atomic-consumption behavior was additionally verified under load against production-style data paths (concurrent winners, replay denials, structured 404s).
+
+## 6. Summary of Honest Limitations
+
+1. Recipients who legitimately decrypt content can copy, screenshot, or save it.
+2. Downloaded files cannot be remotely destroyed.
+3. Compromised participant devices defeat the model at the endpoints.
+4. Malicious served JavaScript defeats browser-crypto systems entirely (acknowledged, out of scope).
+5. Weak PINs are brute-forceable offline where ciphertext survives; destruction defaults exist to shrink that window.
+6. The server sees metadata (titles, filenames/sizes/MIME types, policies, hashed IPs, event timelines) even though it cannot access plaintext content or decryption keys under the documented model.

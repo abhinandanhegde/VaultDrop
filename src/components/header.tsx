@@ -19,7 +19,7 @@ export default function Header() {
     <header className="border-b border-border/50 bg-card/50 backdrop-blur-sm sticky top-0 z-50">
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
         <Link href="/" className="flex items-center gap-2 font-bold text-xl">
-          <span className="text-primary">🔐</span>
+          <span className="text-primary" aria-hidden="true">🔐</span>
           VaultDrop
         </Link>
 
@@ -70,6 +70,7 @@ export default function Header() {
           </button>
           <button
             aria-label="Toggle menu"
+            aria-expanded={menuOpen}
             onClick={() => setMenuOpen(!menuOpen)}
             className={cn("rounded-md p-2 text-foreground hover:bg-accent transition-colors")}
           >

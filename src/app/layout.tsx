@@ -16,8 +16,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "VaultDrop - Secure Secret Delivery",
-  description: "Deliver sensitive secrets with verified one-time access, expiration, and revocation control. Zero-knowledge encryption - the server never sees your plaintext.",
-  keywords: ["secure", "encrypted", "secrets", "zero-knowledge", "delivery", "end-to-end-encrypted"],
+  description: "Deliver sensitive secrets and files via one-time links with PINs, expiry, revocation, and self-destruction. Encrypted in your browser — the server only ever stores ciphertext.",
+  keywords: ["secure", "encrypted", "secrets", "end-to-end encryption", "delivery", "one-time-link"],
   openGraph: {
     title: "VaultDrop - Secure Secret Delivery",
     description: "Deliver sensitive secrets with verified one-time access, expiration, and revocation control.",

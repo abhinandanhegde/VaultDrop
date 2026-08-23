@@ -234,7 +234,7 @@ export default function Home() {
         <div className="mb-5 flex justify-center">
           <span className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/5 px-4 py-1.5 text-xs font-medium text-primary">
             <Lock className="h-3.5 w-3.5" />
-            Zero-knowledge · end-to-end encrypted
+            Encrypted in your browser — the server never sees plaintext
           </span>
         </div>
 
@@ -255,7 +255,7 @@ export default function Home() {
         {/* Composer */}
         <div className="rounded-2xl border border-border/60 bg-card/70 p-5 shadow-2xl sm:p-6">
           {error && (
-            <div className="mb-4 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5 text-sm text-red-400">
+            <div role="alert" className="mb-4 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5 text-sm text-red-400">
               {error}
             </div>
           )}
@@ -465,6 +465,8 @@ export default function Home() {
               {/* Auto-delete toggle */}
               <button
                 type="button"
+                role="switch"
+                aria-checked={burnAfterReading}
                 onClick={() => setBurnAfterReading(!burnAfterReading)}
                 className="flex items-center gap-2 text-left"
               >
@@ -651,6 +653,7 @@ export default function Home() {
             className="mt-4 w-full h-12 rounded-xl text-base font-semibold"
             size="lg"
             onClick={handleDrop}
+            aria-busy={isLoading}
             disabled={
               isLoading ||
               !title.trim() ||
