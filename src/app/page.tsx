@@ -344,12 +344,18 @@ export default function Home() {
                 </div>
               </div>
               <div className="flex flex-shrink-0 gap-2">
-                <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                >
                   Replace
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
+                  type="button"
                   aria-label="Remove file"
                   onClick={() => {
                     setSelectedFile(null);
@@ -363,6 +369,7 @@ export default function Home() {
           ) : (
             /* Drop zone */
             <label
+              htmlFor="vaultdrop-file-input"
               onDragOver={(e) => {
                 e.preventDefault();
                 setDragging(true);
@@ -387,18 +394,22 @@ export default function Home() {
                 <Paperclip className="h-3 w-3" />
                 Encrypted in your browser before upload · Max {formatBytes(MAX_FILE_BYTES)} · PDF, PNG/JPG, DOC(X), TXT, ZIP…
               </span>
-              <input
-                ref={fileInputRef}
-                type="file"
-                className="sr-only"
-                aria-label="Choose file"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) setSelectedFile(f);
-                }}
-              />
             </label>
           )}
+
+          {/* Hidden file input — always mounted so Replace's ref stays live */}
+          <input
+            ref={fileInputRef}
+            id="vaultdrop-file-input"
+            type="file"
+            className="sr-only"
+            aria-label="Choose file"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) setSelectedFile(f);
+              e.target.value = "";
+            }}
+          />
 
           {/* Recipients */}
           <div className="mt-5">
