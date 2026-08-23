@@ -6,7 +6,7 @@
 
 VaultDrop treats shared content — a text secret or an uploaded file — not as static data but as a **controlled delivery**: a payload plus an explicit, server-enforced lifecycle. Creators define who may open it, how access is verified, when it becomes available, how many times it can be opened, and when it must be destroyed.
 
-All cryptography executes in the browser via the Web Crypto API. The backend (Next.js API routes over Supabase PostgreSQL + Storage) sees ciphertext, hashes, policy state, and audit events — never plaintext secrets, raw PINs (new drops), or decryption keys.
+All cryptography executes in the browser via the Web Crypto API. The backend (Next.js API routes over Supabase PostgreSQL + Storage) sees ciphertext, hashes, policy state, and audit events — never plaintext secrets, raw PINs (new deliveries), or decryption keys.
 
 ## 2. Design Principles
 
@@ -21,9 +21,22 @@ All cryptography executes in the browser via the Web Crypto API. The backend (Ne
 
 ## 3. Core Workflow
 
-```text
-Create → Encrypt (browser) → Configure Policy → Deliver (URL + PIN out-of-band)
-      → Authenticate → Atomic Consumption → Expire / Revoke / Burn / Destroy → Purge
+```mermaid
+flowchart LR
+    A("📝 Create") --> B("🔐 Encrypt<br/>in browser")
+    B --> C("⚙️ Configure policy")
+    C --> D("📤 Deliver<br/>URL + PIN separately")
+    D --> E("🔑 Authenticate")
+    E --> F("🔒 Atomic consumption")
+    F --> G("💀 Expire / Revoke /<br/>Burn / Destroy")
+    G --> H("🧹 Purge sweep")
+
+    classDef client fill:#ede9fe,stroke:#7c3aed,color:#4c1d95
+    classDef server fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef terminal fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    class A,B,D client
+    class C,E,F server
+    class G,H terminal
 ```
 
 ## 4. Delivery Domain Model
@@ -51,7 +64,7 @@ key    = PBKDF2-SHA256(pin, salt, 600_000 iterations) → 256-bit AES-GCM key
 ct     = AES-256-GCM(key, nonce, plaintext, tagLength=128)
 ```
 
-Transport: the client sends `{ciphertext, nonce, salt, iterations}` plus the **PIN transport value** — `SHA-256(pin)` hex for new drops (`pin_scheme='sha256'`), the raw digits only from legacy clients (`pin_scheme='raw'`). Decryption re-derives the key locally from the **raw** PIN; wrong PINs fail GCM authentication closed. PBKDF2 parameters arrive from the client but are validated server-side (10,000–1,000,000 iterations accepted).
+Transport: the client sends `{ciphertext, nonce, salt, iterations}` plus the **PIN transport value** — `SHA-256(pin)` hex for new deliveries (`pin_scheme='sha256'`), the raw digits only from legacy clients (`pin_scheme='raw'`). Decryption re-derives the key locally from the **raw** PIN; wrong PINs fail GCM authentication closed. PBKDF2 parameters arrive from the client but are validated server-side (10,000–1,000,000 iterations accepted).
 
 Randomness uses rejection sampling for unbiased digit generation and `crypto.getRandomValues` throughout.
 
@@ -83,16 +96,20 @@ The creator dashboard reads per-recipient states plus the audit timeline; per-re
 
 ## 8. Authentication
 
-- **Verification:** bcrypt comparison of the transport value against `recipients.pin_hash` (legacy route: `deliveries.pin_hash`). Server never learns raw digits for `sha256`-scheme drops — it stores `bcrypt(sha256(pin))`.
-- **Rate limiting:** `check_pin_rate_limit` SQL function counts `pin_failed` events per (IP, drop) in a sliding 15-minute window (max 5); dual-mode since migration 007 (accepts url_token or delivery id). Returns `429` with `Retry-After`. A cheap in-memory limiter remains as a first gate on the legacy path.
-- **Lockout self-destruct:** the 5th failed attempt (counted atomically, §17) destroys that copy — key material nulled, status `locked`, events logged, file blob deleted if no live copies remain.
+| Mechanism | Behavior |
+|---|---|
+| **Verification** | bcrypt comparison of the transport value against `recipients.pin_hash` (legacy route: `deliveries.pin_hash`). Server never learns raw digits for `sha256`-scheme deliveries — it stores `bcrypt(sha256(pin))`. |
+| **Rate limiting** | `check_pin_rate_limit` SQL function counts `pin_failed` events per (IP, delivery) in a sliding 15-minute window (max 5); dual-mode since migration 007 (accepts url_token or delivery id). Returns `429` with `Retry-After`. A cheap in-memory limiter remains as a first gate on the legacy path. |
+| **Lockout self-destruct** | The 5th failed attempt (counted atomically, §17) destroys that copy — key material nulled, status `locked`, events logged, file blob deleted if no live copies remain. |
 
 ## 9. Authorization
 
-- **Creator operations** (status, events, revoke, renew, delete): require `creator_token`, which is distinct from the delivery ID and never part of share links.
-- **Recipient access:** requires the secret `url_token` **and** the PIN.
-- **Database:** RLS enabled on all tables; no anon policies grant data access — all reads/writes flow through service-role API routes.
-- **Storage:** bucket has **no policies at all**; anon/authenticated roles are denied by default. Only service-role code touches objects.
+| Access type | Requirement |
+|---|---|
+| **Creator operations** (status, events, revoke, renew, delete) | `creator_token` — distinct from the delivery ID and never part of share links |
+| **Recipient access** | Secret `url_token` **and** the PIN |
+| **Database reads/writes** | RLS enabled on all tables; no anon policies grant data access — everything flows through service-role API routes |
+| **Storage objects** | Bucket has **no policies at all**; anon/authenticated roles are denied by default — only service-role code touches objects |
 
 ## 10. Time-Locked Release
 
@@ -105,34 +122,41 @@ The creator dashboard reads per-recipient states plus the audit timeline; per-re
 | Expiration | Lazy transition at access time (wipe + `410`) **and** daily purge sweep |
 | Burn-after-read | Copy's ciphertext/nonce/salt/pin_hash nulled in the consumption transaction; delivery flips to `destroyed` when the last live copy goes |
 | Max views | Counted inside the locked transaction; allowance exhaustion burns the copy |
-| Revocation (drop) | All recipient copies wiped, blob deleted, status `revoked` |
+| Revocation (delivery) | All recipient copies wiped, blob deleted, status `revoked` |
 | Recipient revocation | One row wiped; conditional blob cleanup |
 | Dead man's switch | Deadline passed ⇒ destroy on next touch *and* via purge (§12) |
 | Lockout | After 5 atomic failed attempts (§8) |
 | Purge | Daily cron: expire stale actives, wipe their recipients, delete rows dead >30 days (+ blob sweep), prune events >30 days |
 
-Blob deletion follows one rule everywhere: the encrypted file object is removed when its delivery reaches a terminal state, immediately where whole-drop death occurs (revoke/delete/deadman/expiry) and after the last consumable copy disappears for per-recipient deaths (burn/lockout).
+Blob deletion follows one rule everywhere: the encrypted file object is removed when its delivery reaches a terminal state — immediately for whole-delivery deaths (revoke/delete/deadman/expiry) and after the last consumable copy disappears for per-recipient deaths (burn/lockout).
 
 ## 12. Dead-Man's Switch
 
-Creation optionally sets `renewal_deadline = now + renewal_window_minutes` (1–43,200). The creator pushes the deadline forward via `/renew`. If the deadline passes: any access attempt triggers `destroyForDeadManSwitch` (delivery wiped to `destroyed`, all recipient copies wiped, event logged, blob removed) even before the cron runs — a silent sender cannot leave a live drop behind.
+Creation optionally sets `renewal_deadline = now + renewal_window_minutes` (1–43,200). The creator pushes the deadline forward via `/renew`. If the deadline passes: any access attempt triggers `destroyForDeadManSwitch` (delivery wiped to `destroyed`, all recipient copies wiped, event logged, blob removed) even before the cron runs — a silent sender cannot leave a live delivery behind.
 
 ## 13. Delivery State Model
 
 States: `active` · `accessed` · `locked` · `expired` · `revoked` · `destroyed`
 Recipient states: `pending` · `opened` · `revoked` · `locked`
 
-```text
-              ┌──────────┐
-              │  ACTIVE  │
-              └────┬─────┘
-     ┌─────────┬───┴────┬──────────┐
-     ↓         ↓        ↓          ↓
-  ACCESSED  LOCKED  EXPIRED    REVOKED
- (burn→)     │        │          │
-     └────────┴────────┴──────────┘
-                   ↓
-               DESTROYED
+```mermaid
+flowchart TD
+    TL["⏰ release_at elapses"] --> ACTIVE
+    ACTIVE("🟢 ACTIVE") --> ACCESSED("📖 ACCESSED<br/>burn-after-read wipes the copy while serving")
+    ACTIVE -->|"5th failed PIN"| LOCKED("🔒 LOCKED")
+    ACTIVE -->|"expires_at"| EXPIRED("⌛ EXPIRED")
+    ACTIVE -->|"revoke"| REVOKED("🚫 REVOKED")
+    ACCESSED --> DESTROYED("💀 DESTROYED")
+    LOCKED --> DESTROYED
+    EXPIRED --> DESTROYED
+    REVOKED --> DESTROYED
+
+    classDef live fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef warn fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    classDef dead fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    class ACTIVE,TL,ACCESSED live
+    class LOCKED,EXPIRED,REVOKED warn
+    class DESTROYED dead
 ```
 
 Public metadata endpoints translate this machine into user-facing states (`not_released`, `deadman`, etc.) without leaking internal fields.
@@ -157,13 +181,17 @@ RLS is enabled on all three; no anon policies exist — everything flows through
 
 Private bucket **`vaultdrop-files`** (migration 008): `public=false`, `file_size_limit=26214400` (25 MiB), `allowed_mime_types=['application/octet-stream']`, **no `storage.objects` policies**. Consequences:
 
-- Anonymous access fails whether attempted via public URL, direct fetch, or the anon-key SDK client (verified by dedicated probes in the file-delivery suite).
-- Objects are pure ciphertext; the server streams them only after the same PIN/policy/view checks as text.
-- Paths (`deliveries/<deliveryId>/<random>.bin`) are randomly generated, never user-derived.
+| Property | Consequence |
+|---|---|
+| Anonymous access — public URL · direct fetch · anon-key SDK client | Fails in all three vectors (verified by dedicated probes in the file-delivery suite) |
+| Object contents | Pure ciphertext; the server streams them only after the same PIN/policy/view checks as text |
+| Object paths (`deliveries/<deliveryId>/<random>.bin`) | Randomly generated, never user-derived |
 
 ## 17. Atomic Database Operations
 
 Three SQL functions carry the security-critical transitions:
+
+> **Core invariant:** every security-critical state change happens *inside* these locked transactions — application code only invokes them.
 
 | Function | Guarantee |
 |---|---|
@@ -177,11 +205,11 @@ Both access routes fall back to optimistic CAS (`UPDATE … WHERE view_count = <
 
 | Race | Defense | Verified by |
 |---|---|---|
-| Two valid opens of a one-time secret | Advisory lock serializes; second consumer sees nulled ciphertext → `already_consumed` (410) | Hardening suite: 20-way simultaneous open → exactly one 200 |
-| Parallel wrong PINs losing increments | Single-statement atomic increments | Hardening suite: 12 parallel wrong PINs → counter 13, lockout fires |
-| Revocation vs. in-flight access | Status re-checked inside the consumption lock (`delivery_invalid`, `locked`) | Hardening suite: revoked-recipient denial with correct PIN |
-| Expiry vs. in-flight access | Expiry gate runs before any PIN work in both routes | Hardening suite: expired-drop denial |
-| Legacy-path double-read | Optimistic CAS on `view_count` snapshot | Legacy/hardening suites |
+| **Two valid opens of a one-time secret** | Advisory lock serializes; second consumer sees nulled ciphertext → `already_consumed` (410) | Hardening suite: 20-way simultaneous open → exactly one 200 |
+| **Parallel wrong PINs losing increments** | Single-statement atomic increments | Hardening suite: 12 parallel wrong PINs → counter 13, lockout fires |
+| **Revocation vs. in-flight access** | Status re-checked inside the consumption lock (`delivery_invalid`, `locked`) | Hardening suite: revoked-recipient denial with correct PIN |
+| **Expiry vs. in-flight access** | Expiry gate runs before any PIN work in both routes | Hardening suite: expired-delivery denial |
+| **Legacy-path double-read** | Optimistic CAS on `view_count` snapshot | Legacy/hardening suites |
 
 ## 19. Application Architecture
 
@@ -212,11 +240,23 @@ Routes validate input, enforce rate limits and policy gates, call the atomic RPC
 
 ## 20. Security Modules
 
-Cryptographic operations · PIN transport hashing · bcrypt verification · storage abstraction (private-bucket-only) · dead-man's-switch logic · rate limiting (in-memory + SQL-backed) · atomic-consumption RPCs. Isolating these from UI components keeps them auditable and directly exercised by the test suites.
+| Module | Responsibility |
+|---|---|
+| Cryptographic operations | Web Crypto wrappers for text + envelope schemes (§5–§6) |
+| PIN transport hashing | SHA-256 transport value with `pin_scheme` enforcement (§5, §8) |
+| bcrypt verification | Server-side PIN hash comparison (§8) |
+| Storage abstraction | Private-bucket-only upload/download/remove (§16) |
+| Dead-man's-switch logic | Trigger check + destruction helpers (§12) |
+| Rate limiting | In-memory first gate + SQL-backed sliding window (§8) |
+| Atomic-consumption RPCs | Advisory-lock consumption + failed-attempt counting (§17) |
+
+Isolating these from UI components keeps them auditable and directly exercised by the test suites.
 
 ## 21. Testing and Reliability
 
-Seven suites, **126/126 scenarios passing**, executed against a live Supabase backend:
+> ### ✅ 126 / 126 AUTOMATED SCENARIOS PASS
+>
+> Seven suites, executed against a live Supabase backend:
 
 Legacy 4 · Multi-recipient 24 · Time-lock 9 · Lockout 5 · Dead-man's-switch 10 · Security hardening 31 · File delivery 43.
 
@@ -285,9 +325,11 @@ The audit found two attribute-level defects, both fixed: an unnamed toggle recei
 
 **Explicitly out of scope / residual risks:**
 
-- **Malicious served JavaScript** — anyone able to modify the served bundle defeats any browser-crypto design (shared with PrivateBin et al.). Mitigated operationally (static shipping, audit logs), documented as out of scope.
-- **Compromised endpoints** — a compromised creator/recipient device sees decrypted content by definition.
-- **Recipient discretion** — anyone who legitimately decrypts content can copy, screenshot, or save it; downloaded files cannot be remotely destroyed.
-- **Metadata visibility** — titles, filenames/sizes/MIME types, policies, hashed IPs, and timelines are visible to the server operator.
-- **Weak-PIN offline risk** — 6-digit PINs resist online attack (throttle + lockout destruction), but an attacker holding a full database dump plus surviving ciphertext could brute-force offline; default burn-after-read and expiry exist to shrink that window.
-- **Per-instance creation limiting** — the 10/hour creation cap is in-memory (per instance); PIN-attempt throttling is database-backed and not affected.
+| Out-of-scope risk | Detail |
+|---|---|
+| **Malicious served JavaScript** | Anyone able to modify the served bundle defeats any browser-crypto design (shared with PrivateBin et al.). Mitigated operationally (static shipping, audit logs), documented as out of scope. |
+| **Compromised endpoints** | A compromised creator/recipient device sees decrypted content by definition. |
+| **Recipient discretion** | Anyone who legitimately decrypts content can copy, screenshot, or save it; downloaded files cannot be remotely destroyed. |
+| **Metadata visibility** | Titles, filenames/sizes/MIME types, policies, hashed IPs, and timelines are visible to the server operator. |
+| **Weak-PIN offline risk** | 6-digit PINs resist online attack (throttle + lockout destruction), but an attacker holding a full database dump plus surviving ciphertext could brute-force offline; default burn-after-read and expiry exist to shrink that window. |
+| **Per-instance creation limiting** | The 10/hour creation cap is in-memory (per instance); PIN-attempt throttling is database-backed and not affected. |
