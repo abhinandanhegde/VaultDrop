@@ -9,7 +9,7 @@ VaultDrop extends the encrypted-paste primitive (PrivateBin) from *static conten
 Assets protected:
 
 1. **Plaintext content** (text secrets; file bytes) — exists only in creators'/recipients' browsers.
-2. **Key material** — text keys are derived in-browser via PBKDF2-SHA256 from raw PINs; file DEKs are random 256-bit values wrapped per recipient under the same construction. Neither is transmitted or stored in recoverable form.
+2. **Key material** — text keys are derived in-browser via PBKDF2-SHA256 from raw PINs; file DEKs are random 256-bit values wrapped per recipient under the same construction. Neither is transmitted or stored in recoverable form. (In short: unlocking always requires a recipient's actual PIN, computed only on their device.)
 3. **Access accountability** — who opened what is visible only to the creator, gated by a `creator_token` distinct from any shareable identifier.
 
 ## 2. What the Server Can and Cannot See
@@ -29,7 +29,7 @@ Cryptographic parameters as implemented: AES-256-GCM (128-bit auth tags); PBKDF2
 
 ## 3. Threat Analysis
 
-Format: **Threat → Attack scenario → Mitigation → Evidence → Residual risk.**
+Format: **Threat → Attack scenario → Mitigation → Evidence → Residual risk.** Read each entry as: how an attack would work, what stops it, proof that the defense works, and what risk honestly remains.
 
 ### 3.1 Database compromise
 - **Scenario:** attacker obtains a full dump of `deliveries`, `recipients`, `access_events`, plus all Storage objects.
@@ -64,7 +64,7 @@ Format: **Threat → Attack scenario → Mitigation → Evidence → Residual ri
 ### 3.6 Concurrent valid opens of a one-time secret
 - **Scenario:** multiple parties submit the correct PIN simultaneously, each expecting to extract the "one-time" secret.
 - **Mitigation:** consumption runs inside `consume_recipient_secret`: a transaction-level advisory lock (`pg_try_advisory_xact_lock`) plus `SELECT … FOR UPDATE` row locks on recipient and delivery; all policy state is re-checked inside the lock; burn wipes key material in the same transaction that serves bytes. Losers receive structured errors mapped to HTTP 409/410. The legacy route uses optimistic CAS on the `view_count` snapshot — only the winning statement serves ciphertext.
-- **Evidence:** hardening suite: 20-way simultaneous valid-PIN open → exactly one `200`, losers get 409/410/429, replay → 410; file suite: 6-way race → exactly one winner.
+- **Evidence:** hardening suite: 20-way simultaneous valid-PIN open → exactly one `200`, losers get 409/410/429, replay → 410; file suite: 6-way race → exactly one winner; re-verified end-to-end through the real browser UI (10 simultaneous correct-PIN opens of a max-views=1 drop → exactly 1 winner served ciphertext, 9 structured rejections, winner decrypted correctly client-side).
 - **Residual risk:** none within the model.
 
 ### 3.7 View-count races (multi-view deliveries)
@@ -155,7 +155,7 @@ Format: **Threat → Attack scenario → Mitigation → Evidence → Residual ri
 | Security hardening | 31/31 | 20-way open race (one winner), 12-way wrong-PIN race (all counted), revoked/expired denial, max-view enforcement, plaintext-leak scans of every response |
 | File delivery | 43/43 | Byte-exact round-trips (PDF/PNG/random), wrong-PIN unwrap rejection, 413/415 limits, blob deletion across burn/expiry/revoke/lockout, 6-way race, private-bucket anonymous-access probes, text regression |
 
-Type-check passes; ESLint reports 0 errors (1 pre-existing config warning). All randomness derives from Web Crypto (`crypto.getRandomValues` / `crypto.subtle`). Atomic-consumption behavior was additionally verified under load against production-style data paths (concurrent winners, replay denials, structured 404s).
+Type-check passes; ESLint reports 0 errors (1 pre-existing config warning). All randomness derives from Web Crypto (`crypto.getRandomValues` / `crypto.subtle`). Atomic-consumption behavior was additionally verified under load against production-style data paths (concurrent winners, replay denials, structured 404s). Measured performance benchmarks and an accessibility audit (43/43 checks, targeted WCAG 2.1 AA spot-checks) are documented in [`technical-overview.md`](technical-overview.md) §21.
 
 ## 6. Summary of Honest Limitations
 

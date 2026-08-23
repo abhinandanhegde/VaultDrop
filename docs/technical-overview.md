@@ -42,7 +42,7 @@ Identifiers (`delivery id`, `creator_token`, `url_token`) are 128-bit random val
 
 ## 5. Text Encryption Architecture
 
-Per copy, entirely client-side (`src/lib/crypto.ts`):
+Every encrypted copy gets its own key, derived from its own PIN inside the browser (`src/lib/crypto.ts`):
 
 ```
 salt   = random(128 bits)            // unique per encrypted copy
@@ -222,6 +222,42 @@ Legacy 4 · Multi-recipient 24 · Time-lock 9 · Lockout 5 · Dead-man's-switch 
 
 Coverage includes concurrency races (exactly-one-winner assertions), parallel failed-PIN counting, lockout destruction, per-recipient revocation isolation, expired/time-locked denial, byte-exact file round-trips, size/MIME enforcement, lifecycle blob deletion across burn/expiry/revoke/lockout, private-bucket anonymous-access probes, and plaintext-leak scans over every API response. Type-check passes; lint reports 0 errors (1 pre-existing config warning). Security properties are validated at the application/database boundary, not assumed from schema.
 
+### 21.1 Measured Performance
+
+All figures below are observed measurements against a live backend (local front end, cloud Supabase) — none estimated. API timings include validation, bcrypt work, policy gates, atomic consumption, and database round trips; file timings run end-to-end through the real browser UI, so they include client-side envelope encryption, multipart upload, storage write, PIN authentication, and streaming download.
+
+| Operation | n | min | median | max |
+|---|---|---|---|---|
+| Client-side derive + encrypt (PBKDF2-SHA256 600k + AES-256-GCM) | 6 | 171 ms | 214 ms | 227 ms |
+| Secret creation round-trip (`POST /api/delivery`) | 6 | 1.76 s | 1.79 s | 2.03 s |
+| Metadata read (`GET /api/recipients/[token]`) | 20 | 174 ms | 197 ms | — |
+| Wrong-PIN rejection → `403` | 3 | 1.32 s | 1.33 s | 1.35 s |
+| Correct-PIN access → `200` + atomic burn | 4 | 1.13 s | 1.16 s | 1.19 s |
+| Encrypted 1 MB upload (encrypt + POST + storage write) | 2 | 2.95 s | — | 5.17 s |
+| Encrypted 1 MB download (auth + storage fetch + stream) | 2 | 4.08 s | — | 4.61 s |
+| Encrypted 5 MB upload / download | 1 / 1 | 3.65 s / 3.97 s | — | — |
+
+Load behavior:
+
+- 30 parallel metadata reads → **30/30 succeeded**, burst wall time 1.65 s.
+- **10 simultaneous correct-PIN opens of a max-views=1 copy** → exactly one `200`; the other nine received honest rejections (`409`/`410`); the winner's ciphertext decrypted correctly client-side.
+
+Interpretation: creation/access latency is dominated by intentional security costs (bcrypt per attempt, multiple locked database transitions, cross-region DB round trips). The figures demonstrate interactive-speed performance for realistic payload sizes; they are not hosted-production SLAs.
+
+### 21.2 Accessibility Verification
+
+A structured audit ran **43 checks — all passed** in a real browser against both pages. Scope is deliberately documented as targeted WCAG 2.1 AA spot-checks (keyboard-only traversal, programmatic focus/ARIA inventory, computed contrast math, mobile-viewport geometry), not a full screen-reader conformance audit.
+
+Verified results:
+
+- **Keyboard-only operation:** every control Tab-reachable on both flows; a delivery can be composed and sent entirely without a mouse (mode radios via Enter, native file chooser via Enter on the focused input); recipient flow auto-focuses Digit 1 and unlocks fully by keyboard.
+- **Visible focus indication** present on 17/18 tab stops.
+- **Semantics & announcements:** `header`/`main` landmarks, single `h1`, two `radiogroup`s with `aria-checked` radios, both toggles expose `role="switch"` + `aria-checked`, all buttons named, all controls labeled; wrong-PIN failures render in a live `role="alert"` with remaining-attempt feedback.
+- **Contrast (computed):** light body 16.76:1 · muted 10.89:1 · primary 5.05:1 — dark body 16.01:1 · muted 8.55:1 · primary 7.27:1 (all above AA thresholds).
+- **Mobile geometry (390×844):** no horizontal overflow on either page; tap targets measured 48–62 px.
+
+The audit found two attribute-level defects, both fixed: an unnamed toggle received an explicit accessible name, and the release-mode selector pair gained proper radio semantics. Attribute changes only — no visual or behavioral impact.
+
 ## 22. Technology Stack
 
 | Layer | Technologies |
@@ -241,6 +277,7 @@ Coverage includes concurrency races (exactly-one-winner assertions), parallel fa
 - Deterministic destruction wired into every lifecycle exit, including storage blobs
 - Race-proof security transitions at the database boundary
 - Auditable delivery state transitions without exposing content
+- Accessible, keyboard-operable interface — verified by targeted WCAG 2.1 AA spot-checks (§21.2)
 
 ## 24. Security Assumptions and Limitations
 

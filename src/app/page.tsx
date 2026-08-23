@@ -573,11 +573,13 @@ export default function Home() {
                 <Timer className={cn("h-4 w-4", releaseMode === "scheduled" ? "text-primary" : "text-muted-foreground")} />
                 Scheduled opening
               </span>
-              <div className="flex gap-2">
+              <div className="flex gap-2" role="radiogroup" aria-label="Release timing">
                 {(["now", "scheduled"] as const).map((mode) => (
                   <button
                     key={mode}
                     type="button"
+                    role="radio"
+                    aria-checked={releaseMode === mode}
                     onClick={() => setReleaseMode(mode)}
                     className={cn(
                       "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
@@ -620,6 +622,7 @@ export default function Home() {
                 type="button"
                 role="switch"
                 aria-checked={deadManEnabled}
+                aria-label="Delete if I stop checking in"
                 onClick={() => setDeadManEnabled((v) => !v)}
                 className={cn(
                   "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
