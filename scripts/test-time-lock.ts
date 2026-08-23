@@ -17,7 +17,7 @@ const pin = generatePIN();
 const e = await encryptSecret(secret, pin);
 
 const now = Date.now();
-const releaseInMs = 8000;               // unlock 8s after create
+const releaseInMs = 15000;              // unlock 15s after create (headroom for cold route compiles)
 const releaseAt = new Date(now + releaseInMs).toISOString();
 
 function sameTime(a: string, b: string) {
@@ -94,12 +94,19 @@ const recAccessAfter = await req(`/api/recipients/${recipientToken}/access`, {
 });
 ok(recAccessAfter.status === 200 && recAccessAfter.body.status === "ok", "recipient access allowed after release", recAccessAfter.body);
 
+// The recipient's successful access above consumed the one-time secret.
+// Burn-after-read destroys it everywhere: a second read through ANY path —
+// including this legacy endpoint — must be refused with 410 Gone.
 const accessAfter = await req(`/api/delivery/${id}/access`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ pin }),
 });
-ok(accessAfter.status === 200 && accessAfter.body.status === "ok", "legacy access allowed after release", accessAfter.body);
+ok(
+  accessAfter.status === 410 && accessAfter.body.message === "This secret is no longer available",
+  "legacy access refused after one-time secret was consumed (410)",
+  accessAfter.body,
+);
 
 console.log(`\n=== RESULTS: ${passed} passed, ${failed} failed ===`);
 process.exit(failed === 0 ? 0 : 1);
