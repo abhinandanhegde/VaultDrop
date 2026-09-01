@@ -1,13 +1,20 @@
 "use client";
 
+import { useRef } from "react";
 import Link from "next/link";
+import { motion, useInView } from "framer-motion";
 import {
   Lock, Eye, Clock, Flame, User, Server, Monitor,
   CheckCircle2, Send, KeyRound, FileCheck, Trash2,
-  Globe, ShieldCheck, ArrowLeft,
+  Globe, ShieldCheck, ArrowLeft, Sparkles, Shield,
 } from "lucide-react";
 import GlassCard from "@/components/glass-card";
-import AnimatedSection from "@/components/animated-section";
+import TiltCard from "@/components/tilt-card";
+import SpotlightCard from "@/components/spotlight-card";
+import MagneticButton from "@/components/magnetic-button";
+import FloatingOrb from "@/components/floating-orb";
+import GradientLine from "@/components/gradient-line";
+import TextScramble from "@/components/text-scramble";
 import { cn } from "@/lib/utils";
 
 const STEPS = [
@@ -103,193 +110,258 @@ const FAQ = [
   },
 ];
 
+/* ── Scroll-triggered section wrapper ─── */
+function RevealSection({
+  children,
+  className,
+  delay = 0,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  delay?: number;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const isInView = useInView(ref, { once: true, margin: "-80px" });
+
+  return (
+    <motion.div
+      ref={ref}
+      initial={{ opacity: 0, y: 40 }}
+      animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 40 }}
+      transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1], delay }}
+      className={className}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
 export default function HowItWorks() {
   return (
-    <main id="main-content" className="relative min-h-screen pb-20">
+    <main id="main-content" className="relative min-h-screen pb-20 overflow-hidden">
+      {/* Background orbs */}
+      <FloatingOrb className="top-20 left-[10%]" size={400} color="hsl(var(--primary))" delay={0} />
+      <FloatingOrb className="top-60 right-[5%]" size={300} color="hsl(270 80% 60%)" delay={5} />
+      <FloatingOrb className="bottom-40 left-[30%]" size={350} color="hsl(180 80% 50%)" delay={10} />
+
       {/* ─── Hero ─── */}
       <section className="mx-auto max-w-4xl px-4 pt-10 pb-12 text-center sm:pt-16 sm:pb-16">
-        <AnimatedSection animation="rise">
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+        >
           <Link href="/" className="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground/60 transition-colors hover:text-foreground">
             <ArrowLeft className="h-4 w-4" /> Back to create
           </Link>
-          <h1 className="mt-4 text-3xl font-bold tracking-tight sm:text-4xl lg:text-5xl">
+          <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
             How <span className="gradient-text">VaultDrop</span> works
           </h1>
-          <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground lg:text-lg">
+          <p className="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-muted-foreground lg:text-lg">
             VaultDrop delivers secrets and files through a policy-driven lifecycle.
             Every step — encryption, authentication, access control, and destruction —
             is enforced by the server using data it cannot read.
           </p>
-        </AnimatedSection>
+        </motion.div>
       </section>
 
       {/* ─── 6-Step Flow ─── */}
       <section className="mx-auto max-w-4xl px-4 pb-16 sm:pb-20">
-        <AnimatedSection animation="fade-in" delay={1}>
-          <h2 className="mb-8 text-center text-lg font-bold tracking-tight sm:text-xl">The lifecycle</h2>
-        </AnimatedSection>
-        <div className="relative space-y-6">
-          <div className="absolute left-6 top-0 bottom-0 hidden w-px bg-gradient-to-b from-blue-500/30 via-green-500/30 to-red-500/30 sm:block" aria-hidden="true" />
-            {STEPS.map((step, i) => (
-            <AnimatedSection key={step.num} animation="rise" delay={(i + 1) as 1 | 2 | 3 | 4 | 5 | 6}>
+        <RevealSection>
+          <h2 className="mb-10 text-center text-xl font-bold tracking-tight sm:text-2xl">The lifecycle</h2>
+        </RevealSection>
+        <div className="relative space-y-8">
+          {/* Animated timeline line */}
+          <div className="absolute left-6 top-0 bottom-0 hidden w-px sm:block" aria-hidden="true">
+            <div className="h-full bg-gradient-to-b from-blue-500/30 via-green-500/30 to-red-500/30" />
+          </div>
+          {STEPS.map((step, i) => (
+            <RevealSection key={step.num} delay={i * 0.08}>
               <div className="relative flex gap-4 sm:gap-6">
                 <div className="relative z-10 hidden flex-shrink-0 sm:block">
-                  <div className={cn("flex h-12 w-12 items-center justify-center rounded-2xl border", step.color)}>
+                  <motion.div
+                    whileHover={{ scale: 1.15, rotate: 5 }}
+                    className={cn("flex h-14 w-14 items-center justify-center rounded-2xl border transition-shadow hover:shadow-lg", step.color)}
+                  >
                     {step.icon}
-                  </div>
+                  </motion.div>
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-3">
-                    <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-muted/30 font-mono text-xs font-bold text-muted-foreground sm:hidden">
+                    <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted/30 font-mono text-xs font-bold text-muted-foreground sm:hidden">
                       {step.num}
                     </span>
-                    <h3 className="text-base font-bold tracking-tight">{step.title}</h3>
+                    <h3 className="text-lg font-bold tracking-tight">{step.title}</h3>
                   </div>
-                  <p className="mt-2 max-w-lg text-sm leading-relaxed text-muted-foreground/70">{step.desc}</p>
-                  <p className="mt-2 rounded-lg bg-primary/[0.04] px-3 py-2 text-xs text-primary/70">{step.detail}</p>
+                  <p className="mt-2.5 max-w-lg text-sm leading-relaxed text-muted-foreground/70">{step.desc}</p>
+                  <motion.div
+                    initial={{ opacity: 0, width: 0 }}
+                    whileInView={{ opacity: 1, width: "100%" }}
+                    viewport={{ once: true }}
+                    transition={{ delay: 0.3, duration: 0.5 }}
+                    className="mt-3 overflow-hidden"
+                  >
+                    <div className="rounded-xl bg-primary/[0.04] px-4 py-2.5 text-xs text-primary/70 backdrop-blur-sm">{step.detail}</div>
+                  </motion.div>
                 </div>
               </div>
-            </AnimatedSection>
+            </RevealSection>
           ))}
         </div>
       </section>
 
+      <GradientLine className="mx-auto max-w-4xl" />
+
       {/* ─── Access Policy Deep Dive ─── */}
-      <section className="mx-auto max-w-4xl px-4 pb-16 sm:pb-20">
-        <AnimatedSection animation="fade-in">
-          <div className="mb-8 text-center">
-            <h2 className="text-lg font-bold tracking-tight sm:text-xl">The access policy model</h2>
+      <section className="mx-auto max-w-4xl px-4 py-16 sm:py-20">
+        <RevealSection>
+          <div className="mb-10 text-center">
+            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">The access policy model</h2>
             <p className="mt-2 text-sm text-muted-foreground/60">Every VaultDrop delivery answers five questions — and the server enforces every answer.</p>
           </div>
           <div className="space-y-4">
             {POLICY_DIMS.map((dim, i) => (
-              <AnimatedSection key={dim.label} animation="rise" delay={(i + 1) as 1 | 2 | 3 | 4 | 5 | 6}>
-                <GlassCard className="p-5 sm:p-6">
-                  <div className="flex items-start gap-4">
-                    <div className={cn("flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-muted/30", dim.color)}>
-                      {dim.icon}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className={cn("text-xs font-bold uppercase tracking-widest", dim.color)}>{dim.label}</span>
+              <RevealSection key={dim.label} delay={i * 0.08}>
+                <TiltCard intensity={6}>
+                  <SpotlightCard className="rounded-2xl border border-border/15 bg-card/20 p-5 sm:p-6 backdrop-blur-sm">
+                    <div className="flex items-start gap-4">
+                      <motion.div
+                        whileHover={{ scale: 1.1, rotate: 5 }}
+                        className={cn("flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-muted/30", dim.color)}
+                      >
+                        {dim.icon}
+                      </motion.div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className={cn("text-xs font-bold uppercase tracking-widest", dim.color)}>{dim.label}</span>
+                        </div>
+                        <p className="mt-2 text-sm leading-relaxed text-foreground/80">{dim.desc}</p>
+                        <p className="mt-3 rounded-xl bg-background/30 px-4 py-2.5 text-xs text-muted-foreground/50 italic backdrop-blur-sm">
+                          Example: {dim.example}
+                        </p>
                       </div>
-                      <p className="mt-1.5 text-sm leading-relaxed text-foreground/80">{dim.desc}</p>
-                      <p className="mt-2 rounded-lg bg-background/40 px-3 py-2 text-xs text-muted-foreground/50 italic">
-                        Example: {dim.example}
-                      </p>
                     </div>
-                  </div>
-                </GlassCard>
-              </AnimatedSection>
+                  </SpotlightCard>
+                </TiltCard>
+              </RevealSection>
             ))}
           </div>
-        </AnimatedSection>
+        </RevealSection>
       </section>
 
+      <GradientLine className="mx-auto max-w-4xl" />
+
       {/* ─── Security Primitives ─── */}
-      <section className="mx-auto max-w-4xl px-4 pb-16 sm:pb-20">
-        <AnimatedSection animation="fade-in">
-          <div className="mb-8 text-center">
-            <h2 className="text-lg font-bold tracking-tight sm:text-xl">Cryptographic primitives</h2>
+      <section className="mx-auto max-w-4xl px-4 py-16 sm:py-20">
+        <RevealSection>
+          <div className="mb-10 text-center">
+            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Cryptographic primitives</h2>
             <p className="mt-2 text-sm text-muted-foreground/60">Standard, well-analyzed algorithms — used exactly as intended.</p>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2">
             {SECURITY_PRIMITIVES.map((p, i) => (
-              <AnimatedSection key={p.name} animation="pop-in" delay={(i + 1) as 1 | 2 | 3 | 4 | 5 | 6}>
-                <div className="rounded-2xl border border-border/15 bg-card/30 p-5">
-                  <div className="flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-primary" />
-                    <span className="font-mono text-sm font-bold">{p.name}</span>
-                  </div>
-                  <p className="mt-1 text-xs font-semibold uppercase tracking-wider text-primary/60">{p.role}</p>
-                  <p className="mt-2 text-sm text-muted-foreground/60">{p.detail}</p>
-                </div>
-              </AnimatedSection>
+              <RevealSection key={p.name} delay={i * 0.08}>
+                <TiltCard intensity={8}>
+                  <SpotlightCard className="rounded-2xl border border-border/15 bg-card/20 p-6 backdrop-blur-sm h-full">
+                    <div className="flex items-center gap-2.5">
+                      <ShieldCheck className="h-5 w-5 text-primary" />
+                      <span className="font-mono text-base font-bold">{p.name}</span>
+                    </div>
+                    <p className="mt-1.5 text-xs font-semibold uppercase tracking-wider text-primary/60">{p.role}</p>
+                    <p className="mt-3 text-sm leading-relaxed text-muted-foreground/60">{p.detail}</p>
+                  </SpotlightCard>
+                </TiltCard>
+              </RevealSection>
             ))}
           </div>
-        </AnimatedSection>
+        </RevealSection>
       </section>
 
       {/* ─── Architecture ─── */}
       <section className="mx-auto max-w-4xl px-4 pb-16 sm:pb-20">
-        <AnimatedSection animation="fade-in">
-          <div className="mb-8 text-center">
-            <h2 className="text-lg font-bold tracking-tight sm:text-xl">Architecture</h2>
+        <RevealSection>
+          <div className="mb-10 text-center">
+            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Architecture</h2>
             <p className="mt-2 text-sm text-muted-foreground/60">Three layers, strict separation.</p>
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
-            <div className="rounded-2xl border border-purple-500/15 bg-purple-500/[0.03] p-5">
-              <div className="mb-3 flex items-center gap-2">
-                <Monitor className="h-4 w-4 text-purple-400" />
-                <span className="text-xs font-bold uppercase tracking-widest text-purple-400">Browser</span>
-              </div>
-              <ul className="space-y-1.5 text-sm text-muted-foreground/60">
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-purple-400/60" /> Key derivation</li>
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-purple-400/60" /> Encryption / decryption</li>
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-purple-400/60" /> Key wrapping</li>
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-purple-400/60" /> All plaintext handling</li>
-              </ul>
-            </div>
-            <div className="rounded-2xl border border-blue-500/15 bg-blue-500/[0.03] p-5">
-              <div className="mb-3 flex items-center gap-2">
-                <Server className="h-4 w-4 text-blue-400" />
-                <span className="text-xs font-bold uppercase tracking-widest text-blue-400">Server</span>
-              </div>
-              <ul className="space-y-1.5 text-sm text-muted-foreground/60">
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-blue-400/60" /> Policy enforcement</li>
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-blue-400/60" /> PIN verification</li>
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-blue-400/60" /> Rate limiting</li>
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-blue-400/60" /> Atomic operations</li>
-              </ul>
-            </div>
-            <div className="rounded-2xl border border-green-500/15 bg-green-500/[0.03] p-5">
-              <div className="mb-3 flex items-center gap-2">
-                <Globe className="h-4 w-4 text-green-400" />
-                <span className="text-xs font-bold uppercase tracking-widest text-green-400">Storage</span>
-              </div>
-              <ul className="space-y-1.5 text-sm text-muted-foreground/60">
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-green-400/60" /> Encrypted ciphertext</li>
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-green-400/60" /> Wrapped file keys</li>
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-green-400/60" /> Policy metadata</li>
-                <li className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-green-400/60" /> Audit events</li>
-              </ul>
-            </div>
-          </div>
-        </AnimatedSection>
-      </section>
-
-      {/* ─── FAQ ─── */}
-      <section className="mx-auto max-w-3xl px-4 pb-16 sm:pb-20">
-        <AnimatedSection animation="fade-in">
-          <div className="mb-8 text-center">
-            <h2 className="text-lg font-bold tracking-tight sm:text-xl">Frequently asked questions</h2>
-          </div>
-          <div className="space-y-3">
-            {FAQ.map((item, i) => (
-              <AnimatedSection key={item.q} animation="rise" delay={(i + 1) as 1 | 2 | 3 | 4 | 5 | 6}>
-                <GlassCard className="p-5">
-                  <h3 className="text-sm font-bold">{item.q}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground/70">{item.a}</p>
-                </GlassCard>
-              </AnimatedSection>
+            {[
+              { icon: <Monitor className="h-5 w-5" />, title: "Browser", color: "purple", items: ["Key derivation", "Encryption / decryption", "Key wrapping", "All plaintext handling"] },
+              { icon: <Server className="h-5 w-5" />, title: "Server", color: "blue", items: ["Policy enforcement", "PIN verification", "Rate limiting", "Atomic operations"] },
+              { icon: <Globe className="h-5 w-5" />, title: "Storage", color: "green", items: ["Encrypted ciphertext", "Wrapped file keys", "Policy metadata", "Audit events"] },
+            ].map((layer, i) => (
+              <RevealSection key={layer.title} delay={i * 0.1}>
+                <TiltCard intensity={10}>
+                  <SpotlightCard className={cn("rounded-2xl border p-6 h-full backdrop-blur-sm",
+                    layer.color === "purple" ? "border-purple-500/15 bg-purple-500/[0.03]" :
+                    layer.color === "blue" ? "border-blue-500/15 bg-blue-500/[0.03]" :
+                    "border-green-500/15 bg-green-500/[0.03]"
+                  )}>
+                    <div className="mb-4 flex items-center gap-2.5">
+                      <span className={cn(layer.color === "purple" ? "text-purple-400" : layer.color === "blue" ? "text-blue-400" : "text-green-400")}>{layer.icon}</span>
+                      <span className={cn("text-xs font-bold uppercase tracking-widest", layer.color === "purple" ? "text-purple-400" : layer.color === "blue" ? "text-blue-400" : "text-green-400")}>{layer.title}</span>
+                    </div>
+                    <ul className="space-y-2.5">
+                      {layer.items.map((item) => (
+                        <li key={item} className="flex items-center gap-2 text-sm text-muted-foreground/60">
+                          <CheckCircle2 className={cn("h-3.5 w-3.5 flex-shrink-0", layer.color === "purple" ? "text-purple-400/60" : layer.color === "blue" ? "text-blue-400/60" : "text-green-400/60")} />
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </SpotlightCard>
+                </TiltCard>
+              </RevealSection>
             ))}
           </div>
-        </AnimatedSection>
+        </RevealSection>
+      </section>
+
+      <GradientLine className="mx-auto max-w-3xl" />
+
+      {/* ─── FAQ ─── */}
+      <section className="mx-auto max-w-3xl px-4 py-16 sm:py-20">
+        <RevealSection>
+          <div className="mb-10 text-center">
+            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Frequently asked questions</h2>
+          </div>
+          <div className="space-y-4">
+            {FAQ.map((item, i) => (
+              <RevealSection key={item.q} delay={i * 0.06}>
+                <SpotlightCard className="rounded-2xl border border-border/15 bg-card/20 p-6 backdrop-blur-sm">
+                  <h3 className="text-sm font-bold">{item.q}</h3>
+                  <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground/70">{item.a}</p>
+                </SpotlightCard>
+              </RevealSection>
+            ))}
+          </div>
+        </RevealSection>
       </section>
 
       {/* ─── CTA ─── */}
       <section className="mx-auto max-w-3xl px-4 text-center">
-        <AnimatedSection animation="pop-in">
-          <GlassCard className="p-8 sm:p-10" glow>
-            <h2 className="text-xl font-bold tracking-tight sm:text-2xl">Ready to send something securely?</h2>
-            <p className="mx-auto mt-3 max-w-md text-sm text-muted-foreground/60">
-              No account required. No plaintext on the server. Just a secret, a policy, and a link.
-            </p>
-            <Link href="/#create" className="mt-6 inline-flex items-center gap-2 rounded-xl bg-primary px-8 py-3.5 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/20 transition-all hover:shadow-xl hover:shadow-primary/30 hover:scale-[1.02] active:scale-[0.98]">
-              <Send className="h-4 w-4" /> Create a delivery
-            </Link>
-          </GlassCard>
-        </AnimatedSection>
+        <RevealSection>
+          <TiltCard intensity={8}>
+            <GlassCard className="p-8 sm:p-10" glow>
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                whileInView={{ scale: 1, opacity: 1 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.5 }}
+              >
+                <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Ready to send something securely?</h2>
+                <p className="mx-auto mt-4 max-w-md text-sm text-muted-foreground/60">
+                  No account required. No plaintext on the server. Just a secret, a policy, and a link.
+                </p>
+                <MagneticButton strength={0.2}>
+                  <Link href="/#create" className="btn-glow mt-8 inline-flex items-center gap-2.5 rounded-2xl bg-primary px-10 py-4 text-sm font-semibold text-primary-foreground shadow-xl shadow-primary/25 transition-all hover:shadow-2xl hover:shadow-primary/35 hover:scale-[1.02] active:scale-[0.98]">
+                    <Send className="h-4 w-4" /> Create a delivery
+                  </Link>
+                </MagneticButton>
+              </motion.div>
+            </GlassCard>
+          </TiltCard>
+        </RevealSection>
       </section>
     </main>
   );

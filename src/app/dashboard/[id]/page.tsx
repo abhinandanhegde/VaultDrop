@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
+import { motion, AnimatePresence, useInView } from "framer-motion";
 import {
   Copy, Ban, Clock, RefreshCw, Eye, ShieldCheck, HeartPulse,
   Users, Flame, AlertTriangle, Timer, Plus, ArrowLeft, Shield,
+  Activity, TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +14,12 @@ import { Spinner } from "@/components/ui/spinner";
 import { CopyButton } from "@/components/copy-button";
 import Envelope from "@/components/envelope";
 import GlassCard from "@/components/glass-card";
-import AnimatedSection from "@/components/animated-section";
+import TiltCard from "@/components/tilt-card";
+import SpotlightCard from "@/components/spotlight-card";
+import MagneticButton from "@/components/magnetic-button";
+import FloatingOrb from "@/components/floating-orb";
+import GradientLine from "@/components/gradient-line";
+import NumberCounter from "@/components/number-counter";
 import { cn } from "@/lib/utils";
 
 interface Recipient {
@@ -169,7 +176,10 @@ export default function DispatchBoard() {
     return (
       <main id="main-content" className="flex min-h-screen items-center justify-center">
         <div className="flex flex-col items-center gap-5">
-          <div className="relative"><Spinner className="h-8 w-8 text-primary" /><div className="absolute inset-0 animate-glow rounded-full" /></div>
+          <div className="relative">
+            <Spinner className="h-8 w-8 text-primary" />
+            <div className="absolute inset-0 animate-glow rounded-full" />
+          </div>
           <p className="text-sm text-muted-foreground animate-pulse-glow">Loading dispatch…</p>
         </div>
       </main>
@@ -182,7 +192,9 @@ export default function DispatchBoard() {
         <GlassCard className="max-w-sm border-red-500/30 text-center">
           <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-red-400" />
           <h1 className="text-lg font-bold text-red-400">{error}</h1>
-          <Button variant="outline" size="sm" className="mt-4 rounded-lg" onClick={fetchData}>Retry</Button>
+          <MagneticButton strength={0.2}>
+            <Button variant="outline" size="sm" className="mt-4 rounded-xl" onClick={fetchData}>Retry</Button>
+          </MagneticButton>
         </GlassCard>
       </main>
     );
@@ -195,54 +207,80 @@ export default function DispatchBoard() {
   const statusColor = delivery?.status === "active" ? "text-green-400 bg-green-500/10 border-green-500/30" : delivery?.status === "expired" ? "text-red-400 bg-red-500/10 border-red-500/30" : "text-muted-foreground bg-muted border-border/50";
 
   return (
-    <main id="main-content" className="relative min-h-screen pb-20">
+    <main id="main-content" className="relative min-h-screen pb-20 overflow-hidden">
+      {/* Background orbs */}
+      <FloatingOrb className="top-20 right-[10%]" size={300} color="hsl(var(--primary))" delay={0} />
+      <FloatingOrb className="bottom-40 left-[5%]" size={250} color="hsl(270 80% 60%)" delay={7} />
+
       <div className="mx-auto w-full max-w-5xl px-4 pt-8 sm:px-6 lg:px-8">
         {/* Back button */}
-        <AnimatedSection animation="fade-in">
+        <motion.div
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.5 }}
+        >
           <button onClick={() => router.push("/")} className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground">
             <ArrowLeft className="h-4 w-4" /> Create another drop
           </button>
-        </AnimatedSection>
+        </motion.div>
 
         {/* 2-column desktop layout */}
         <div className="grid gap-8 lg:grid-cols-12">
           {/* Left: Header + Stats */}
           <div className="lg:col-span-4">
-            <AnimatedSection animation="rise">
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
+            >
               <GlassCard className="sticky top-24">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-primary/60">Dispatch board</p>
                 <h1 className="mt-2 text-2xl font-bold tracking-tight lg:text-3xl">{delivery?.title || "Untitled"}</h1>
                 <div className="mt-3">
-                  <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium", statusColor)}>
+                  <motion.span
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium", statusColor)}
+                  >
                     <span className={cn("h-1.5 w-1.5 rounded-full", delivery?.status === "active" ? "bg-green-400 animate-pulse" : "bg-current")} />
                     {delivery?.status === "active" ? "Active" : delivery?.status}
-                  </span>
+                  </motion.span>
                 </div>
 
-                {/* Stats */}
-                <div className="mt-6 space-y-3">
-                  <div className="flex items-center justify-between rounded-xl bg-green-500/5 px-3 py-2.5">
-                    <span className="flex items-center gap-2 text-sm text-muted-foreground"><Eye className="h-4 w-4 text-green-400" /> Opened</span>
-                    <span className="text-lg font-bold tabular-nums text-green-400">{openedCount}</span>
-                  </div>
-                  <div className="flex items-center justify-between rounded-xl bg-blue-500/5 px-3 py-2.5">
-                    <span className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="h-4 w-4 text-blue-400" /> Waiting</span>
-                    <span className="text-lg font-bold tabular-nums text-blue-400">{waiting}</span>
-                  </div>
-                  <div className="flex items-center justify-between rounded-xl bg-muted/30 px-3 py-2.5">
-                    <span className="flex items-center gap-2 text-sm text-muted-foreground"><Users className="h-4 w-4 text-muted-foreground" /> Total</span>
-                    <span className="text-lg font-bold tabular-nums">{recipients.length}</span>
-                  </div>
-                  {revokedCount > 0 && (
-                    <div className="flex items-center justify-between rounded-xl bg-yellow-500/5 px-3 py-2.5">
-                      <span className="flex items-center gap-2 text-sm text-muted-foreground"><Ban className="h-4 w-4 text-yellow-400" /> Revoked</span>
-                      <span className="text-lg font-bold tabular-nums text-yellow-400">{revokedCount}</span>
+                {/* Bento Stats */}
+                <div className="mt-6 grid grid-cols-2 gap-2">
+                  <SpotlightCard className="rounded-xl border border-border/15 bg-card/20 p-3">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground"><Eye className="h-3.5 w-3.5 text-green-400" /> Opened</div>
+                    <div className="mt-1 text-2xl font-bold tabular-nums text-green-400">
+                      <NumberCounter value={openedCount} />
                     </div>
+                  </SpotlightCard>
+                  <SpotlightCard className="rounded-xl border border-border/15 bg-card/20 p-3">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground"><Clock className="h-3.5 w-3.5 text-blue-400" /> Waiting</div>
+                    <div className="mt-1 text-2xl font-bold tabular-nums text-blue-400">
+                      <NumberCounter value={waiting} />
+                    </div>
+                  </SpotlightCard>
+                  <SpotlightCard className="rounded-xl border border-border/15 bg-card/20 p-3">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground"><Users className="h-3.5 w-3.5" /> Total</div>
+                    <div className="mt-1 text-2xl font-bold tabular-nums">
+                      <NumberCounter value={recipients.length} />
+                    </div>
+                  </SpotlightCard>
+                  {revokedCount > 0 && (
+                    <SpotlightCard className="rounded-xl border border-border/15 bg-card/20 p-3">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground"><Ban className="h-3.5 w-3.5 text-yellow-400" /> Revoked</div>
+                      <div className="mt-1 text-2xl font-bold tabular-nums text-yellow-400">
+                        <NumberCounter value={revokedCount} />
+                      </div>
+                    </SpotlightCard>
                   )}
                 </div>
 
+                <GradientLine className="my-4" />
+
                 {/* Expiry/release info */}
-                <div className="mt-4 space-y-2 border-t border-border/20 pt-4 text-xs text-muted-foreground/60">
+                <div className="space-y-2 text-xs text-muted-foreground/60">
                   {delivery?.expiresAt && <p className="flex items-center gap-1.5"><Clock className="h-3 w-3 text-orange-400" /> Expires {formatDate(delivery.expiresAt)}</p>}
                   {delivery?.releaseAt && <p className="flex items-center gap-1.5"><Timer className="h-3 w-3 text-primary" /> Unlocks {formatDate(delivery.releaseAt)}</p>}
                   {delivery?.burnAfterReading && <p className="flex items-center gap-1.5"><Flame className="h-3 w-3 text-orange-400" /> Burn after reading</p>}
@@ -250,89 +288,131 @@ export default function DispatchBoard() {
 
                 {/* Dead Man's Switch */}
                 {delivery?.renewalDeadline && delivery.status === "active" && (
-                  <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/[0.04] p-3">
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="mt-4 rounded-xl border border-red-500/20 bg-red-500/[0.04] p-3"
+                  >
                     <div className="flex items-center justify-between">
                       <span className="flex items-center gap-2 text-sm font-medium"><HeartPulse className="h-4 w-4 text-red-400 animate-pulse-glow" /> Dead man&apos;s armed</span>
-                      <Button size="sm" variant="outline" onClick={renewDelivery} disabled={actionKey !== null} className="rounded-lg border-red-500/30 text-red-400 hover:bg-red-500/10">
-                        <RefreshCw className={cn("mr-1 h-3 w-3", actionKey === "renew" && "animate-spin")} /> Renew
-                      </Button>
+                      <MagneticButton strength={0.3}>
+                        <Button size="sm" variant="outline" onClick={renewDelivery} disabled={actionKey !== null} className="rounded-xl border-red-500/30 text-red-400 hover:bg-red-500/10">
+                          <RefreshCw className={cn("mr-1 h-3 w-3", actionKey === "renew" && "animate-spin")} /> Renew
+                        </Button>
+                      </MagneticButton>
                     </div>
                     <p className="mt-1 text-[11px] text-muted-foreground/60">Deadline: <span className="font-semibold text-red-400">{formatDate(delivery.renewalDeadline)}</span></p>
-                  </div>
+                  </motion.div>
                 )}
 
                 {/* Bulk actions */}
                 <div className="mt-4 flex gap-2">
-                  {recipients.length > 1 && <Button variant="outline" size="sm" onClick={copyAll} className="flex-1 rounded-lg"><Copy className="mr-1 h-3.5 w-3.5" />{copiedAll ? "Copied!" : "Copy all"}</Button>}
-                  <Button variant="outline" size="sm" onClick={fetchData} className="rounded-lg"><RefreshCw className="h-3.5 w-3.5" /></Button>
+                  {recipients.length > 1 && (
+                    <MagneticButton strength={0.2} className="flex-1">
+                      <Button variant="outline" size="sm" onClick={copyAll} className="w-full rounded-xl">
+                        <Copy className="mr-1 h-3.5 w-3.5" />{copiedAll ? "Copied!" : "Copy all"}
+                      </Button>
+                    </MagneticButton>
+                  )}
+                  <MagneticButton strength={0.3}>
+                    <Button variant="outline" size="sm" onClick={fetchData} className="rounded-xl"><RefreshCw className="h-3.5 w-3.5" /></Button>
+                  </MagneticButton>
                 </div>
               </GlassCard>
-            </AnimatedSection>
+            </motion.div>
           </div>
 
           {/* Right: Recipients + Timeline */}
           <div className="space-y-6 lg:col-span-8">
             {/* Recipients */}
-            <AnimatedSection animation="rise" delay={1}>
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.7, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
+            >
               <h2 className="mb-4 text-sm font-semibold text-foreground/80">Recipients</h2>
               <div className="space-y-2.5">
                 {recipients.length === 0 && <GlassCard className="py-10 text-center text-sm text-muted-foreground">No recipients yet.</GlassCard>}
-                {recipients.map((r, i) => {
-                  const url = `${appOrigin()}/r/${r.urlToken}`;
-                  const opened = r.status === "opened";
-                  const revoked = r.status === "revoked";
-                  const borderColor = opened ? "border-l-green-500" : revoked ? "border-l-yellow-500" : "border-l-blue-500";
-                  return (
-                    <div key={r.id} className={cn("glass-strong rounded-xl border-l-[3px] p-4 transition-all duration-200 hover:shadow-lg hover:shadow-primary/[0.02]", borderColor, revoked && "opacity-60")}>
-                      <div className="flex items-center gap-3.5">
-                        <Envelope size="sm" open={opened} label={r.name || `Person ${i + 1}`} className={cn(!opened && !revoked && "animate-glow")} />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="truncate text-sm font-semibold">{r.name || `Person ${i + 1}`}</p>
-                            <Badge className={cn("text-[10px] font-semibold", STATUS_STYLES[r.status] || "")}>{STATUS_LABEL[r.status] || r.status}</Badge>
+                <AnimatePresence>
+                  {recipients.map((r, i) => {
+                    const url = `${appOrigin()}/r/${r.urlToken}`;
+                    const opened = r.status === "opened";
+                    const revoked = r.status === "revoked";
+                    const borderColor = opened ? "border-l-green-500" : revoked ? "border-l-yellow-500" : "border-l-blue-500";
+                    return (
+                      <motion.div
+                        key={r.id}
+                        layout
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: -20 }}
+                        transition={{ duration: 0.4, delay: i * 0.05 }}
+                        className={cn("glass-strong rounded-2xl border-l-[3px] p-4 transition-all duration-300 hover:shadow-lg hover:shadow-primary/[0.03]", borderColor, revoked && "opacity-60")}
+                      >
+                        <div className="flex items-center gap-3.5">
+                          <Envelope size="sm" open={opened} label={r.name || `Person ${i + 1}`} className={cn(!opened && !revoked && "animate-glow")} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="truncate text-sm font-semibold">{r.name || `Person ${i + 1}`}</p>
+                              <Badge className={cn("text-[10px] font-semibold rounded-lg", STATUS_STYLES[r.status] || "")}>{STATUS_LABEL[r.status] || r.status}</Badge>
+                            </div>
+                            <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground/60">{url}</p>
+                            {opened && r.openedAt && <p className="mt-0.5 text-[11px] text-green-400">Opened {timeAgo(r.openedAt)}</p>}
+                            {revoked && r.revokedAt && <p className="mt-0.5 text-[11px] text-yellow-400">Revoked {timeAgo(r.revokedAt)}</p>}
+                            {r.status === "pending" && <p className="mt-0.5 text-[11px] text-muted-foreground/50">Send link + PIN through separate channels.</p>}
                           </div>
-                          <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground/60">{url}</p>
-                          {opened && r.openedAt && <p className="mt-0.5 text-[11px] text-green-400">Opened {timeAgo(r.openedAt)}</p>}
-                          {revoked && r.revokedAt && <p className="mt-0.5 text-[11px] text-yellow-400">Revoked {timeAgo(r.revokedAt)}</p>}
-                          {r.status === "pending" && <p className="mt-0.5 text-[11px] text-muted-foreground/50">Send link + PIN through separate channels.</p>}
+                          <div className="flex items-center gap-1.5">
+                            <CopyButton text={url} label="Link" compact />
+                            <MagneticButton strength={0.3}>
+                              <Button variant="ghost" size="sm" onClick={() => revokeRecipient(r)} disabled={actionKey === `rev-${r.urlToken}` || opened || revoked} className="h-8 w-8 rounded-xl p-0 text-red-400/50 hover:bg-red-500/10 hover:text-red-400 disabled:opacity-30">
+                                {actionKey === `rev-${r.urlToken}` ? <Spinner className="h-3.5 w-3.5" /> : <Ban className="h-3.5 w-3.5" />}
+                              </Button>
+                            </MagneticButton>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-1.5">
-                          <CopyButton text={url} label="Link" compact />
-                          <Button variant="ghost" size="sm" onClick={() => revokeRecipient(r)} disabled={actionKey === `rev-${r.urlToken}` || opened || revoked} className="h-8 w-8 rounded-lg p-0 text-red-400/50 hover:bg-red-500/10 hover:text-red-400 disabled:opacity-30">
-                            {actionKey === `rev-${r.urlToken}` ? <Spinner className="h-3.5 w-3.5" /> : <Ban className="h-3.5 w-3.5" />}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
               </div>
-            </AnimatedSection>
+            </motion.div>
 
             {/* Activity Timeline */}
             {events.length > 0 && (
-              <AnimatedSection animation="rise" delay={2}>
+              <motion.div
+                initial={{ opacity: 0, y: 30 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.7, delay: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              >
                 <GlassCard>
-                  <h2 className="mb-5 flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="h-4 w-4 text-primary" /> Activity</h2>
+                  <h2 className="mb-5 flex items-center gap-2 text-sm font-semibold">
+                    <Activity className="h-4 w-4 text-primary" /> Activity
+                  </h2>
                   <div className="relative ml-2 space-y-0">
-                    <div className="absolute left-[7px] top-2 bottom-2 w-px bg-border/30" aria-hidden="true" />
-                    {events.slice().reverse().map((e) => {
+                    <div className="absolute left-[7px] top-2 bottom-2 w-px bg-gradient-to-b from-primary/30 via-border/30 to-border/10" aria-hidden="true" />
+                    {events.slice().reverse().map((e, i) => {
                       const evt = EVENT_ICONS[e.eventType] || EVENT_ICONS.created;
                       const label = !["created", "pin_validated", "pin_failed", "accessed", "destroyed", "renewed", "revoked", "locked", "expired"].includes(e.eventType) ? e.eventType : null;
                       const eventLabel = e.eventType === "created" ? "Drop dispatched" : e.eventType === "pin_validated" ? "PIN accepted" : e.eventType === "pin_failed" ? "Failed PIN attempt" : e.eventType === "accessed" ? "Secret opened" : e.eventType === "renewed" ? "Dead man's renewed" : e.eventType === "destroyed" ? (e.metadata?.reason === "dead_man_switch" ? "Self-destructed" : "Destroyed after read") : e.eventType === "revoked" ? "Link revoked" : e.eventType === "locked" ? "Locked — wrong PINs" : e.eventType === "expired" ? "Drop expired" : label || e.eventType;
                       return (
-                        <div key={e.id} className="relative flex items-start gap-3 py-2.5">
+                        <motion.div
+                          key={e.id}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: i * 0.05 }}
+                          className="relative flex items-start gap-3 py-2.5"
+                        >
                           <div className={cn("relative z-10 flex h-[15px] w-[15px] flex-shrink-0 items-center justify-center rounded-full text-white", evt.color)}>{evt.icon}</div>
                           <div className="min-w-0 flex-1 pt-px">
                             <p className="text-sm text-foreground/90">{eventLabel}</p>
                             <p className="text-[11px] text-muted-foreground/50">{timeAgo(e.eventTime)}</p>
                           </div>
-                        </div>
+                        </motion.div>
                       );
                     })}
                   </div>
                 </GlassCard>
-              </AnimatedSection>
+              </motion.div>
             )}
           </div>
         </div>
