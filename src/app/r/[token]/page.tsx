@@ -2,13 +2,17 @@
 
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
-import { Eye, EyeOff, AlertTriangle, Clock, Timer, HeartPulse, FileText, Download } from "lucide-react";
+import {
+  Eye, EyeOff, AlertTriangle, Clock, Timer, HeartPulse,
+  FileText, Download, Shield, Lock,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { CopyButton } from "@/components/copy-button";
 import Envelope from "@/components/envelope";
 import PinInput from "@/components/pin-input";
+import GlassCard from "@/components/glass-card";
+import AnimatedSection from "@/components/animated-section";
 import {
   decryptSecret,
   hashPinForTransport,
@@ -106,8 +110,6 @@ export default function EnvelopePage() {
     setError(null);
 
     try {
-      // Transport-hash the PIN for hashed-scheme drops so the raw PIN never
-      // reaches the server. Decryption below still uses the raw PIN locally.
       const transportPin =
         meta?.pinScheme === "sha256" ? await hashPinForTransport(pin) : pin;
       const res = await fetch(`/api/recipients/${token}/access`, {
@@ -116,7 +118,6 @@ export default function EnvelopePage() {
         body: JSON.stringify({ pin: transportPin }),
       });
 
-      // Encrypted-file drops answer with raw ciphertext + metadata headers.
       const responseMime = res.headers.get("content-type") ?? "";
       if (res.ok && responseMime.includes("application/octet-stream")) {
         const metaB64 = res.headers.get("X-Vaultdrop-Meta");
@@ -124,7 +125,6 @@ export default function EnvelopePage() {
         const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(metaB64)));
         const cipherBytes = new Uint8Array(await res.arrayBuffer());
 
-        // Recover the content key locally, then decrypt — all in-browser.
         const fileKey = await unwrapFileKeyWithPin(
           header.wrapped.e,
           header.wrapped.n,
@@ -234,59 +234,67 @@ export default function EnvelopePage() {
   const label = meta?.name || meta?.title || "A secret";
 
   return (
-    <main className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-4 py-12">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-1/2 top-1/2 h-[360px] w-[560px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/10 blur-[120px]" />
+    <main id="main-content" className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-4 py-12">
+      {/* Background */}
+      <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+        <div className="absolute left-1/2 top-1/2 h-[400px] w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/[0.06] blur-[140px]" />
       </div>
 
-      <div className="relative z-10 w-full max-w-md">
+      <div className="relative z-10 w-full max-w-lg">
         {/* Loading */}
         {state === "loading" && (
-          <div className="flex flex-col items-center gap-6 animate-fade-in">
-            <Envelope size="lg" className="animate-glow" />
-            <Spinner className="h-5 w-5 text-primary" />
+          <div className="flex flex-col items-center gap-7 animate-fade-in">
+            <div className="relative">
+              <Envelope size="lg" className="animate-glow" />
+              <div className="absolute inset-0 rounded-xl bg-primary/5 animate-pulse-glow" />
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <Spinner className="h-5 w-5 text-primary" />
+              <span className="text-sm text-muted-foreground/70">Locating your drop…</span>
+            </div>
           </div>
         )}
 
         {/* Sealed envelope + PIN */}
         {state === "pin" && (
-          <div className="flex flex-col items-center gap-6 animate-pop-in">
+          <div className="flex flex-col items-center gap-7 animate-pop-in">
             <Envelope size="lg" label={label} className="animate-glow" />
 
-            <div className="w-full rounded-2xl border border-border/60 bg-card/70 p-6 backdrop-blur">
-              <div className="mb-1 text-center">
-                <h1 className="text-lg font-bold">A sealed drop is waiting</h1>
-                <p className="mt-0.5 text-sm text-muted-foreground">
+            <GlassCard className="w-full p-6 sm:p-8 text-center" glow>
+              <div className="mb-1">
+                <h1 className="text-xl font-bold tracking-tight">A sealed drop is waiting</h1>
+                <p className="mt-1 text-sm text-muted-foreground">
                   {meta?.name ? `For ${meta.name} — ` : ""}enter the 6-digit PIN sent
                   to you separately.
                 </p>
               </div>
 
-              <div className="mt-5">
+              <div className="mt-6">
                 <PinInput
                   onSubmit={handlePin}
                   autoFocus
                   resetKey={pinAttempt}
+                  shake={!!error}
                 />
               </div>
 
               {(error || remaining !== null) && (
-                <div className="mt-4">
+                <div className="mt-5">
                   {error && (
-                    <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5 text-sm text-red-400">
+                    <div role="alert" className="animate-shake flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-400">
                       <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                       <span>{error}</span>
                     </div>
                   )}
                   {remaining !== null && remaining > 0 && (
-                    <p className="mt-2 text-center text-xs text-muted-foreground">
+                    <p className="mt-2.5 text-xs text-muted-foreground">
                       {remaining} attempt{remaining === 1 ? "" : "s"} left before lockout.
                     </p>
                   )}
                 </div>
               )}
 
-              <div className="mt-4 flex items-center justify-center gap-4 text-[11px] text-muted-foreground">
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-4 text-[11px] text-muted-foreground/60">
                 {meta?.kind === "file" && (
                   <span className="flex items-center gap-1">
                     <FileText className="h-3 w-3" />
@@ -299,19 +307,28 @@ export default function EnvelopePage() {
                     Expires {formatDate(meta.expiresAt)}
                   </span>
                 )}
-                {meta?.burnAfterReading && <span>Burns after this read</span>}
+                {meta?.burnAfterReading && (
+                  <span className="flex items-center gap-1">
+                    <Shield className="h-3 w-3" />
+                    Burns after this read
+                  </span>
+                )}
               </div>
-            </div>
+            </GlassCard>
           </div>
         )}
 
         {/* Opening */}
         {state === "opening" && (
-          <div className="flex flex-col items-center gap-6 animate-fade-in">
+          <div className="flex flex-col items-center gap-7 animate-fade-in">
             <Envelope size="lg" label={label} open />
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Spinner className="h-4 w-4 text-primary" />
-              Breaking the seal…
+            <div className="flex flex-col items-center gap-3">
+              <div className="relative">
+                <Spinner className="h-6 w-6 text-primary" />
+                <div className="absolute inset-0 animate-glow rounded-full" />
+              </div>
+              <span className="text-sm font-medium text-muted-foreground">Breaking the seal…</span>
+              <span className="text-[11px] text-muted-foreground/50">Decrypting in your browser</span>
             </div>
           </div>
         )}
@@ -319,24 +336,27 @@ export default function EnvelopePage() {
         {/* Revealed — file */}
         {state === "viewing" && file && (
           <div className="animate-pop-in">
-            <div className="mb-4 flex flex-col items-center gap-3">
-              <Envelope size="md" open />
+            <div className="mb-5 flex flex-col items-center gap-4">
+              <div className="relative">
+                <Envelope size="md" open />
+                <div className="absolute inset-0 animate-success-flash rounded-xl" />
+              </div>
               <div className="text-center">
-                <p className="text-xs uppercase tracking-widest text-green-400">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-green-400">
                   Seal broken
                 </p>
-                <h1 className="text-lg font-bold">{meta?.title || "Your secret"}</h1>
+                <h1 className="mt-1 text-xl font-bold">{meta?.title || "Your secret"}</h1>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-border/60 bg-card/70 p-5 backdrop-blur">
+            <GlassCard className="p-5 sm:p-6" glow>
               <div className="flex items-center gap-4">
-                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl border border-border/50 bg-muted/40">
-                  <FileText className="h-6 w-6 text-primary" />
+                <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-2xl bg-primary/10">
+                  <FileText className="h-7 w-7 text-primary" />
                 </div>
                 <div className="min-w-0">
-                  <p className="truncate font-semibold">{file.name}</p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="truncate text-sm font-semibold">{file.name}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
                     {formatBytes(file.size)} · decrypted in your browser
                   </p>
                 </div>
@@ -345,30 +365,32 @@ export default function EnvelopePage() {
               <a
                 href={file.url}
                 download={file.name}
-                className="mt-5"
+                className="mt-5 block"
                 aria-label="Download File"
               >
-                <Button className="w-full h-11 rounded-xl font-semibold">
+                <Button className="btn-glow w-full h-12 rounded-xl text-sm font-semibold bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90 shadow-lg shadow-primary/20 transition-all duration-300 hover:shadow-xl hover:shadow-primary/30 active:scale-[0.99]">
                   <Download className="mr-2 h-4 w-4" />
                   Download File
                 </Button>
               </a>
 
               {opened && (
-                <p className="mt-3 text-center text-[11px] text-muted-foreground">
+                <p className="mt-3 text-center text-[11px] text-muted-foreground/60">
                   The encrypted copy on the server has been deleted. This local
-                  copy is yours to keep or remove.
+                  copy is yours to keep.
                 </p>
               )}
-            </div>
+            </GlassCard>
 
             {opened && (
-              <div className="mt-4 rounded-xl border border-orange-500/20 bg-orange-500/5 px-4 py-3 text-center text-sm">
-                <strong className="text-orange-400">This drop has been destroyed.</strong>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Nothing remains on the server. It can never be opened again.
-                </p>
-              </div>
+              <AnimatedSection delay={2} className="mt-4">
+                <GlassCard className="border-orange-500/20 bg-orange-500/[0.04] p-4 text-center">
+                  <strong className="text-sm text-orange-400">This drop has been destroyed.</strong>
+                  <p className="mt-1 text-xs text-muted-foreground/60">
+                    Nothing remains on the server. It can never be opened again.
+                  </p>
+                </GlassCard>
+              </AnimatedSection>
             )}
           </div>
         )}
@@ -376,19 +398,22 @@ export default function EnvelopePage() {
         {/* Revealed — text */}
         {state === "viewing" && !file && (
           <div className="animate-pop-in">
-            <div className="mb-4 flex flex-col items-center gap-3">
-              <Envelope size="md" open />
+            <div className="mb-5 flex flex-col items-center gap-4">
+              <div className="relative">
+                <Envelope size="md" open />
+                <div className="absolute inset-0 animate-success-flash rounded-xl" />
+              </div>
               <div className="text-center">
-                <p className="text-xs uppercase tracking-widest text-green-400">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-green-400">
                   Seal broken
                 </p>
-                <h1 className="text-lg font-bold">{meta?.title || "Your secret"}</h1>
+                <h1 className="mt-1 text-xl font-bold">{meta?.title || "Your secret"}</h1>
               </div>
             </div>
 
-            <div className="relative rounded-2xl border border-border/60 bg-card/70 p-5 backdrop-blur">
+            <GlassCard className="relative p-5 sm:p-6" glow>
               <pre
-                className={`max-h-[50vh] overflow-auto whitespace-pre-wrap font-mono text-sm leading-relaxed transition-all duration-300 ${
+                className={`max-h-[50vh] overflow-auto whitespace-pre-wrap font-mono text-sm leading-relaxed transition-all duration-500 ${
                   show ? "" : "blur-sm select-none"
                 }`}
               >
@@ -396,94 +421,123 @@ export default function EnvelopePage() {
               </pre>
               <button
                 onClick={() => setShow(!show)}
-                className="absolute right-3 top-3 rounded-lg border border-border/50 bg-background/80 p-1.5 hover:bg-accent"
+                className="absolute right-4 top-4 rounded-lg border border-border/50 bg-background/80 p-2 backdrop-blur-sm transition-colors hover:bg-accent"
                 aria-label={show ? "Hide" : "Show"}
               >
                 {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
-            </div>
+            </GlassCard>
 
-            <div className="mt-3 flex items-center justify-center gap-2">
+            <div className="mt-3 flex items-center justify-center gap-3">
               <CopyButton text={content} label="Copy secret" />
-              <Button variant="ghost" size="sm" onClick={() => setShow(!show)}>
+              <button
+                onClick={() => setShow(!show)}
+                className="flex items-center gap-1.5 rounded-lg border border-input bg-background/50 px-3 py-1.5 text-xs font-medium backdrop-blur-sm transition-all duration-200 hover:bg-accent/60 hover:text-foreground"
+              >
+                {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 {show ? "Hide" : "Show"}
-              </Button>
+              </button>
             </div>
 
             {opened && (
-              <div className="mt-4 rounded-xl border border-orange-500/20 bg-orange-500/5 px-4 py-3 text-center text-sm">
-                <strong className="text-orange-400">This drop has been destroyed.</strong>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Nothing remains on the server. It can never be opened again.
-                </p>
-              </div>
+              <AnimatedSection delay={2} className="mt-4">
+                <GlassCard className="border-orange-500/20 bg-orange-500/[0.04] p-4 text-center">
+                  <strong className="text-sm text-orange-400">This drop has been destroyed.</strong>
+                  <p className="mt-1 text-xs text-muted-foreground/60">
+                    Nothing remains on the server. It can never be opened again.
+                  </p>
+                </GlassCard>
+              </AnimatedSection>
             )}
           </div>
         )}
 
         {/* Time-locked */}
         {state === "not_released" && !isReleased && (
-          <div className="flex flex-col items-center gap-6 animate-pop-in">
+          <div className="flex flex-col items-center gap-7 animate-pop-in">
             <Envelope size="lg" label={label} className="animate-glow" />
-            <Card className="w-full border-border/60 bg-card/70 backdrop-blur">
-              <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border/50 bg-muted/40">
-                  <Timer className="h-6 w-6 text-primary" />
+            <GlassCard className="w-full text-center" glow>
+              <div className="flex h-16 w-16 mx-auto items-center justify-center rounded-2xl bg-primary/10 mb-4">
+                <Timer className="h-8 w-8 text-primary" />
+              </div>
+              <h2 className="text-xl font-bold">Time-locked</h2>
+              <p className="mt-2 max-w-xs mx-auto text-sm text-muted-foreground">
+                This drop is sealed until{" "}
+                <strong className="text-foreground">
+                  {meta?.releaseAt ? formatDate(meta.releaseAt) : "later"}
+                </strong>
+                . Even with the right PIN, no one can open it before then.
+              </p>
+              {meta?.releaseAt && (
+                <div className="mt-5 inline-flex rounded-2xl border border-primary/30 bg-primary/[0.08] px-6 py-3 font-mono text-2xl font-bold text-primary tabular-nums">
+                  {formatCountdown(meta.releaseAt)}
                 </div>
-                <div>
-                  <h2 className="text-lg font-bold">Time-locked</h2>
-                  <p className="mt-1 max-w-xs text-sm text-muted-foreground">
-                    This drop is sealed until{" "}
-                    <strong className="text-foreground">
-                      {meta?.releaseAt ? formatDate(meta.releaseAt) : "later"}
-                    </strong>
-                    . Even with the right PIN, no one can open it before then.
-                  </p>
-                </div>
-                {meta?.releaseAt && (
-                  <div className="rounded-xl border border-primary/30 bg-primary/10 px-5 py-2 font-mono text-xl font-bold text-primary">
-                    {formatCountdown(meta.releaseAt)}
-                  </div>
-                )}
-                {meta?.expiresAt && (
-                  <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <Clock className="h-3 w-3" />
-                    Expires {formatDate(meta.expiresAt)}
-                  </p>
-                )}
-              </CardContent>
-            </Card>
+              )}
+              {meta?.expiresAt && (
+                <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted-foreground/60">
+                  <Clock className="h-3 w-3" />
+                  Expires {formatDate(meta.expiresAt)}
+                </p>
+              )}
+            </GlassCard>
           </div>
         )}
 
         {/* Time-lock released → prompt for PIN */}
         {state === "not_released" && isReleased && (
-          <div className="animate-pop-in">
+          <div className="flex flex-col items-center gap-6 animate-pop-in">
             <Envelope size="lg" label={label} className="animate-glow" />
-            <Spinner className="mt-4 h-5 w-5 text-primary" />
+            <div className="flex items-center gap-3">
+              <Spinner className="h-5 w-5 text-primary" />
+              <span className="text-sm text-muted-foreground">Unlocked — entering PIN…</span>
+            </div>
           </div>
         )}
 
         {/* Terminal states */}
         {state === "expired" && (
-          <StatusCard icon={<Clock className="h-6 w-6 text-red-400" />} title="This drop expired" desc="It was never opened in time and is gone." />
+          <StatusCard
+            icon={<Clock className="h-6 w-6 text-red-400" />}
+            title="This drop expired"
+            desc="It was never opened in time and is gone."
+          />
         )}
         {state === "revoked" && (
-          <StatusCard icon={<AlertTriangle className="h-6 w-6 text-red-400" />} title="This drop was revoked" desc="The sender recalled it before you opened it." />
+          <StatusCard
+            icon={<AlertTriangle className="h-6 w-6 text-red-400" />}
+            title="This drop was revoked"
+            desc="The sender recalled it before you opened it."
+          />
         )}
         {state === "deadman" && (
-          <StatusCard icon={<HeartPulse className="h-6 w-6 text-red-400" />} title="Self-destructed" desc="The sender stopped renewing this drop. It self-destructed — nothing remains on the server." />
+          <StatusCard
+            icon={<HeartPulse className="h-6 w-6 text-red-400" />}
+            title="Self-destructed"
+            desc="The sender stopped renewing this drop. It self-destructed — nothing remains on the server."
+          />
         )}
         {state === "locked" && (
-          <StatusCard icon={<AlertTriangle className="h-6 w-6 text-red-400" />} title="Locked and destroyed" desc="Too many wrong PINs. The copy was destroyed — nothing remains on the server." />
+          <StatusCard
+            icon={<AlertTriangle className="h-6 w-6 text-red-400" />}
+            title="Locked and destroyed"
+            desc="Too many wrong PINs. The copy was destroyed — nothing remains on the server."
+          />
         )}
         {state === "opened" && (
-          <StatusCard icon={<Envelope size="sm" />} title="Already opened" desc="This drop was opened before. It's gone forever." />
+          <StatusCard
+            icon={<Lock className="h-6 w-6 text-muted-foreground" />}
+            title="Already opened"
+            desc="This drop was opened before. It's gone forever."
+          />
         )}
         {state === "error" && (
-          <div className="animate-pop-in">
+          <div className="animate-pop-in flex flex-col items-center gap-6">
             <Envelope size="lg" />
-            <StatusCard icon={<AlertTriangle className="h-6 w-6 text-red-400" />} title="Something went wrong" desc={error || "This link is not valid."} />
+            <StatusCard
+              icon={<AlertTriangle className="h-6 w-6 text-red-400" />}
+              title="Something went wrong"
+              desc={error || "This link is not valid."}
+            />
           </div>
         )}
       </div>
@@ -493,16 +547,14 @@ export default function EnvelopePage() {
 
 function StatusCard({ icon, title, desc }: { icon: React.ReactNode; title: string; desc: string }) {
   return (
-    <Card className="border-border/60 bg-card/70 backdrop-blur animate-fade-in">
-      <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
-        <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border/50 bg-muted/40">
+    <div className="animate-pop-in">
+      <GlassCard className="text-center">
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-muted/30 backdrop-blur-sm">
           {icon}
         </div>
-        <div>
-          <h2 className="text-lg font-bold">{title}</h2>
-          <p className="mt-1 max-w-xs text-sm text-muted-foreground">{desc}</p>
-        </div>
-      </CardContent>
-    </Card>
+        <h2 className="text-lg font-bold tracking-tight">{title}</h2>
+        <p className="mt-2 max-w-xs mx-auto text-sm leading-relaxed text-muted-foreground">{desc}</p>
+      </GlassCard>
+    </div>
   );
 }

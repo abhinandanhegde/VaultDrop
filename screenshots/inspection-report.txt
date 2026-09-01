@@ -1,0 +1,219 @@
+
+================================================================================
+INSPECTING: HOME @ 1440x900
+================================================================================
+Viewport: 1440x900
+
+Body: bg=rgb(18, 18, 18) color=rgb(242, 242, 242) font=Geist, "Geist Fallback", system-ui, sans-serif size=16px
+
+H1: "Share secrets.Control access."
+  fontSize=60px weight=700 color=rgb(242, 242, 242)
+  position: top=-410px width=992px center=720px
+
+Section layout:
+  [0] w=1024px h=536px left=208px right=208px "Client-side encrypted — server never sees plaintex"
+  [1] w=896px h=157px left=272px right=272px "✏️CreateWrite or upload🔒EncryptIn your browser📤S"
+  [2] w=768px h=1171px left=336px right=336px "Content🔐Text SecretPasswords, API keys, notes📎En"
+  [3] w=896px h=398px left=272px right=272px "What does VaultDrop know?The security boundary is "
+  [main] w=1440px h=2262px left=0px right=0px "MAIN"
+
+Glass/Card elements (3):
+  [0] DIV w=736px left=352px right=352px bg=rgba(10, 24, 61, 0.4) border=1px solid rgba(16, 38, 96, 0.1 backdrop=blur(24px)
+  [1] DIV w=424px left=288px right=728px bg=rgba(34, 197, 94, 0.03) border=1px solid rgba(34, 197, 94, 0. backdrop=none
+  [2] DIV w=424px left=728px right=288px bg=rgba(59, 130, 246, 0.03) border=1px solid rgba(59, 130, 246, 0 backdrop=none
+
+Form card: w=736px h=1091px
+  left=352px right=352px
+  bg=rgba(10, 24, 61, 0.4) border=1px solid rgba(16, 38, 96, 0.15)
+  borderRadius=16px backdrop=blur(24px)
+  boxShadow=none
+
+Access Policy grid: totalWidth=670px
+  Who: w=215px h=162px bg=rgba(18, 18, 18, 0.2)
+  How: w=215px h=162px bg=rgba(18, 18, 18, 0.2)
+  When: w=215px h=162px bg=rgba(18, 18, 18, 0.2)
+  How many: w=215px h=102px bg=rgba(18, 18, 18, 0.2)
+  After access: w=215px h=102px bg=rgba(18, 18, 18, 0.2)
+
+CTA: "Create Secure Delivery" h=48px w=670px bg=rgb(37, 175, 244) color=rgb(9, 20, 52) weight=600
+
+Lifecycle ribbon:
+  Create: left=310px
+  Encrypt: left=492px
+  Share: left=691px
+  Access: left=876px
+  Destroyed: left=1060px
+  totalWidth=822px centered=YES
+
+Trust model: top=1304px height=398px
+
+Empty space analysis:
+  Main height: 2262px
+  Content ends at: 2262px
+  Empty space at bottom: 0px
+  Side margins: left=0px right=0px
+
+Text color palette:
+  <A> color=rgb(242, 242, 242) size=16px weight=400 "Skip to main content"
+  <SPAN> color=rgb(255, 255, 255) size=14px weight=700 "V"
+  <SPAN> color=rgb(242, 242, 242) size=18px weight=700 "VaultDrop"
+  <A> color=rgb(166, 166, 166) size=14px weight=500 "Create"
+  <BUTTON> color=rgb(166, 166, 166) size=16px weight=400 ""
+  <H1> color=rgb(242, 242, 242) size=60px weight=700 "Share secrets.Control access."
+  <P> color=rgb(166, 166, 166) size=18px weight=400 "Encrypt in your browser. Define who"
+  <P> color=rgba(166, 166, 166, 0.6) size=14px weight=400 "Passwords, API keys, and confidenti"
+  <A> color=rgb(9, 20, 52) size=14px weight=600 "Create a delivery"
+  <A> color=rgba(242, 242, 242, 0.8) size=14px weight=600 "How it works"
+  <SPAN> color=rgb(242, 242, 242) size=20px weight=400 "✏️"
+  <SPAN> color=rgba(242, 242, 242, 0.9) size=14px weight=600 "Create"
+  <SPAN> color=rgba(166, 166, 166, 0.5) size=11px weight=400 "Write or upload"
+  <P> color=rgba(166, 166, 166, 0.5) size=12px weight=600 "Content"
+  <SPAN> color=rgb(242, 242, 242) size=14px weight=600 "Text Secret"
+
+Page metrics: scrollHeight=2392px viewport=900px main=2262px
+
+================================================================================
+INSPECTING: HOME @ 1280x800
+================================================================================
+Viewport: 1280x800
+
+Body: bg=rgb(18, 18, 18) color=rgb(242, 242, 242) font=Geist, "Geist Fallback", system-ui, sans-serif size=16px
+
+H1: "Share secrets.Control access."
+  fontSize=60px weight=700 color=rgb(242, 242, 242)
+  position: top=-460px width=992px center=640px
+
+Section layout:
+  [0] w=1024px h=536px left=128px right=128px "Client-side encrypted — server never sees plaintex"
+  [1] w=896px h=157px left=192px right=192px "✏️CreateWrite or upload🔒EncryptIn your browser📤S"
+  [2] w=768px h=1171px left=256px right=256px "Content🔐Text SecretPasswords, API keys, notes📎En"
+  [3] w=896px h=398px left=192px right=192px "What does VaultDrop know?The security boundary is "
+  [main] w=1280px h=2262px left=0px right=0px "MAIN"
+
+Glass/Card elements (3):
+  [0] DIV w=736px left=272px right=272px bg=rgba(10, 24, 61, 0.4) border=1px solid rgba(16, 38, 96, 0.1 backdrop=blur(24px)
+  [1] DIV w=424px left=208px right=648px bg=rgba(34, 197, 94, 0.03) border=1px solid rgba(34, 197, 94, 0. backdrop=none
+  [2] DIV w=424px left=648px right=208px bg=rgba(59, 130, 246, 0.03) border=1px solid rgba(59, 130, 246, 0 backdrop=none
+
+Form card: w=736px h=1091px
+  left=272px right=272px
+  bg=rgba(10, 24, 61, 0.4) border=1px solid rgba(16, 38, 96, 0.15)
+  borderRadius=16px backdrop=blur(24px)
+  boxShadow=none
+
+Access Policy grid: totalWidth=670px
+  Who: w=215px h=162px bg=rgba(18, 18, 18, 0.2)
+  How: w=215px h=162px bg=rgba(18, 18, 18, 0.2)
+  When: w=215px h=162px bg=rgba(18, 18, 18, 0.2)
+  How many: w=215px h=102px bg=rgba(18, 18, 18, 0.2)
+  After access: w=215px h=102px bg=rgba(18, 18, 18, 0.2)
+
+CTA: "Create Secure Delivery" h=48px w=670px bg=rgb(37, 175, 244) color=rgb(9, 20, 52) weight=600
+
+Lifecycle ribbon:
+  Create: left=230px
+  Encrypt: left=412px
+  Share: left=611px
+  Access: left=796px
+  Destroyed: left=980px
+  totalWidth=822px centered=YES
+
+Trust model: top=1254px height=398px
+
+Empty space analysis:
+  Main height: 2262px
+  Content ends at: 2262px
+  Empty space at bottom: 0px
+  Side margins: left=0px right=0px
+
+Text color palette:
+  <A> color=rgb(242, 242, 242) size=16px weight=400 "Skip to main content"
+  <SPAN> color=rgb(255, 255, 255) size=14px weight=700 "V"
+  <SPAN> color=rgb(242, 242, 242) size=18px weight=700 "VaultDrop"
+  <A> color=rgb(166, 166, 166) size=14px weight=500 "Create"
+  <BUTTON> color=rgb(166, 166, 166) size=16px weight=400 ""
+  <H1> color=rgb(242, 242, 242) size=60px weight=700 "Share secrets.Control access."
+  <P> color=rgb(166, 166, 166) size=18px weight=400 "Encrypt in your browser. Define who"
+  <P> color=rgba(166, 166, 166, 0.6) size=14px weight=400 "Passwords, API keys, and confidenti"
+  <A> color=rgb(9, 20, 52) size=14px weight=600 "Create a delivery"
+  <A> color=rgba(242, 242, 242, 0.8) size=14px weight=600 "How it works"
+  <SPAN> color=rgb(242, 242, 242) size=20px weight=400 "✏️"
+  <SPAN> color=rgba(242, 242, 242, 0.9) size=14px weight=600 "Create"
+  <SPAN> color=rgba(166, 166, 166, 0.5) size=11px weight=400 "Write or upload"
+  <P> color=rgba(166, 166, 166, 0.5) size=12px weight=600 "Content"
+  <SPAN> color=rgb(242, 242, 242) size=14px weight=600 "Text Secret"
+
+Page metrics: scrollHeight=2392px viewport=800px main=2262px
+
+================================================================================
+INSPECTING: HOME @ 390x844-mobile
+================================================================================
+Viewport: 390x844
+
+Body: bg=rgb(18, 18, 18) color=rgb(242, 242, 242) font=Geist, "Geist Fallback", system-ui, sans-serif size=16px
+
+H1: "Share secrets.Control access."
+  fontSize=36px weight=700 color=rgb(242, 242, 242)
+  position: top=-390px width=358px center=195px
+
+Section layout:
+  [0] w=390px h=494px left=0px right=0px "Client-side encrypted — server never sees plaintex"
+  [1] w=390px h=98px left=0px right=0px "✏️CreateWrite or upload🔒EncryptIn your browser📤S"
+  [2] w=390px h=1550px left=0px right=0px "Content🔐Text SecretPasswords, API keys, notes📎En"
+  [3] w=390px h=620px left=0px right=0px "What does VaultDrop know?The security boundary is "
+  [main] w=390px h=2762px left=0px right=0px "MAIN"
+
+Glass/Card elements (3):
+  [0] DIV w=358px left=16px right=16px bg=rgba(10, 24, 61, 0.4) border=1px solid rgba(16, 38, 96, 0.1 backdrop=blur(24px)
+  [1] DIV w=358px left=16px right=16px bg=rgba(34, 197, 94, 0.03) border=1px solid rgba(34, 197, 94, 0. backdrop=none
+  [2] DIV w=358px left=16px right=16px bg=rgba(59, 130, 246, 0.03) border=1px solid rgba(59, 130, 246, 0 backdrop=none
+
+Form card: w=358px h=1486px
+  left=16px right=16px
+  bg=rgba(10, 24, 61, 0.4) border=1px solid rgba(16, 38, 96, 0.15)
+  borderRadius=16px backdrop=blur(24px)
+  boxShadow=none
+
+Access Policy grid: totalWidth=316px
+  Who: w=316px h=126px bg=rgba(18, 18, 18, 0.2)
+  How: w=316px h=144px bg=rgba(18, 18, 18, 0.2)
+  When: w=316px h=100px bg=rgba(18, 18, 18, 0.2)
+  How many: w=316px h=98px bg=rgba(18, 18, 18, 0.2)
+  After access: w=316px h=86px bg=rgba(18, 18, 18, 0.2)
+
+CTA: "Create Secure Delivery" h=48px w=316px bg=rgb(37, 175, 244) color=rgb(9, 20, 52) weight=600
+
+Lifecycle ribbon:
+  Create: left=-87px
+  Encrypt: left=37px
+  Share: left=168px
+  Access: left=287px
+  Destroyed: left=415px
+  totalWidth=564px centered=YES
+
+Trust model: top=1642px height=620px
+
+Empty space analysis:
+  Main height: 2762px
+  Content ends at: 2762px
+  Empty space at bottom: 0px
+  Side margins: left=0px right=0px
+
+Text color palette:
+  <A> color=rgb(242, 242, 242) size=16px weight=400 "Skip to main content"
+  <SPAN> color=rgb(255, 255, 255) size=14px weight=700 "V"
+  <SPAN> color=rgb(242, 242, 242) size=18px weight=700 "VaultDrop"
+  <A> color=rgb(166, 166, 166) size=14px weight=500 "Create"
+  <BUTTON> color=rgb(166, 166, 166) size=16px weight=400 ""
+  <H1> color=rgb(242, 242, 242) size=36px weight=700 "Share secrets.Control access."
+  <P> color=rgba(166, 166, 166, 0.6) size=14px weight=400 "Passwords, API keys, and confidenti"
+  <A> color=rgb(9, 20, 52) size=14px weight=600 "Create a delivery"
+  <A> color=rgba(242, 242, 242, 0.8) size=14px weight=600 "How it works"
+  <SPAN> color=rgb(242, 242, 242) size=20px weight=400 "✏️"
+  <SPAN> color=rgba(242, 242, 242, 0.9) size=12px weight=600 "Create"
+  <SPAN> color=rgba(166, 166, 166, 0.5) size=11px weight=400 "Write or upload"
+  <P> color=rgba(166, 166, 166, 0.5) size=12px weight=600 "Content"
+  <SPAN> color=rgb(242, 242, 242) size=14px weight=600 "Text Secret"
+  <SPAN> color=rgb(166, 166, 166) size=11px weight=400 "Passwords, API keys, notes"
+
+Page metrics: scrollHeight=2892px viewport=844px main=2762px
