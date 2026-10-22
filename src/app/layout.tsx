@@ -3,9 +3,6 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import Header from "@/components/header";
-import Footer from "@/components/footer";
-import ScrollProgress from "@/components/scroll-progress";
-import CursorGlow from "@/components/cursor-glow";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -42,26 +39,12 @@ export default function RootLayout({
       >
         <ThemeProvider
           attribute="class"
-          defaultTheme="void"
+          defaultTheme="system"
           enableSystem
           disableTransitionOnChange
-          themes={["light", "dark", "void"]}
         >
-          <ScrollProgress />
-          <CursorGlow />
-          <div className="mesh-bg" aria-hidden="true" />
-          <div className="noise-overlay" aria-hidden="true" />
-          <a
-            href="#main-content"
-            className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:shadow-lg focus:outline-none"
-          >
-            Skip to main content
-          </a>
           <Header />
-          <div className="relative z-10 flex min-h-screen flex-col">
-            <div className="flex-1">{children}</div>
-            <Footer />
-          </div>
+          {children}
         </ThemeProvider>
       </body>
     </html>

@@ -9,10 +9,9 @@ interface PinInputProps {
   autoFocus?: boolean;
   resetKey?: number | string;
   className?: string;
-  shake?: boolean;
 }
 
-export default function PinInput({ onSubmit, disabled, autoFocus, resetKey, className, shake }: PinInputProps) {
+export default function PinInput({ onSubmit, disabled, autoFocus, resetKey, className }: PinInputProps) {
   const [digits, setDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [active, setActive] = useState(0);
   const refs = useRef<(HTMLInputElement | null)[]>([]);
@@ -88,7 +87,7 @@ export default function PinInput({ onSubmit, disabled, autoFocus, resetKey, clas
   }
 
   return (
-    <div className={cn("flex justify-center gap-2.5", shake && "animate-shake", className)}>
+    <div className={cn("flex justify-center gap-2.5", className)}>
       {digits.map((digit, i) => (
         <input
           key={i}
